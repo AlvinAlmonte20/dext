@@ -38,8 +38,7 @@ requires
   FireDACCommonDriver,
   FireDACSqliteDriver,
   Dext.AST.Core,
-  Dext.Core,
-  FireDACCommonODBC;
+  Dext.Core;
 
 contains
   Dext.Entity.BatchStrategy in '..\..\Sources\Data\Dext.Entity.BatchStrategy.pas',

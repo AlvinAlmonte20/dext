@@ -90,7 +90,6 @@
         <DCCReference Include="FireDACSqliteDriver.dcp"/>
         <DCCReference Include="Dext.AST.Core.dcp"/>
         <DCCReference Include="Dext.Core.dcp"/>
-        <DCCReference Include="FireDACCommonODBC.dcp"/>
         <DCCReference Include="..\..\Sources\Data\Dext.Entity.BatchStrategy.pas"/>
         <DCCReference Include="..\..\Sources\Data\Dext.Entity.Context.pas"/>
         <DCCReference Include="..\..\Sources\Data\Dext.Entity.Setup.pas"/>

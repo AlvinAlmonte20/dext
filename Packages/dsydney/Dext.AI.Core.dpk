@@ -1,4 +1,4 @@
-package Dext.AI.Core;
+﻿package Dext.AI.Core;
 
 {$R *.res}
 {$IFDEF IMPLICITBUILDING This IFDEF should not be used by users}
