@@ -69,21 +69,4 @@ paths:
   extra library paths: 
     - Sources\Common
   extra browsing paths: 
-    - Sources\Common        
-
-defines:
-  available defines:
-    # Security & Network
-    - DEXT_ENABLE_SSL
-    - DEXT_ENABLE_TAURUS_TLS
-
-    # Web Features
-    - DEXT_ENABLE_WEB_STENCILS
-
-    # Database Drivers (Entity)
-    - DEXT_ENABLE_DB_POSTGRES
-    - DEXT_ENABLE_DB_MYSQL
-    - DEXT_ENABLE_DB_MSSQL
-    - DEXT_ENABLE_DB_ORACLE
-    - DEXT_ENABLE_DB_FIREBIRD
-    - DEXT_ENABLE_DB_ODBC
+    - Sources\Common
