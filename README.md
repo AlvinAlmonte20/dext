@@ -46,6 +46,16 @@ This is not a feature catalog. It is a real corporate product — **Dext Faturam
   <img src="Docs/Images/dext-web-book-mockup.png" alt="Book: Professional Web Development with Delphi and Dext Framework" width="70%">
 </p>
 
+### 🇺🇸 English edition
+
+**Professional Web Development with Delphi and Dext Framework** — Cesar Romero, 1st edition, 2026. ISBN 978-65-02-38868-6.
+
+- **Paperback (Amazon):** [amazon.com/dp/650238868X](https://www.amazon.com/dp/650238868X)
+- **Kindle:** [amazon.com/dp/B0HKNZR9FW](https://www.amazon.com/dp/B0HKNZR9FW)
+- **Lab source:** [github.com/dotpas/book-dext-web](https://github.com/dotpas/book-dext-web)
+
+### 🇧🇷 Portuguese edition
+
 **Desenvolvimento Web Profissional com Delphi e Dext Framework** — Cesar Romero, 1st edition, 2026. ISBN 978-65-02-32503-2.
 
 - **Print in Brazil (UICLAP):** [loja.uiclap.com/titulo/ua197387](https://loja.uiclap.com/titulo/ua197387)
@@ -53,8 +63,6 @@ This is not a feature catalog. It is a real corporate product — **Dext Faturam
 - **Kindle (Brazil):** [amazon.com.br/dp/B0HGYTSYYY](https://www.amazon.com.br/dp/B0HGYTSYYY)
 - **Kindle (global):** [amazon.com/dp/B0HGYTSYYY](https://www.amazon.com/dp/B0HGYTSYYY)
 - **Lab source:** [github.com/dotpas/book-dext-web](https://github.com/dotpas/book-dext-web)
-
-The English edition is in final review.
 
 ---
 

@@ -46,6 +46,16 @@ Não é um catálogo de features. É um produto corporativo real — o **Dext Fa
   <img src="Docs/Images/dext-web-book-mockup.png" alt="Livro Desenvolvimento Web Profissional com Delphi e Dext Framework" width="70%">
 </p>
 
+### 🇺🇸 Edição em inglês
+
+**Professional Web Development with Delphi and Dext Framework** — Cesar Romero, 1st edition, 2026. ISBN 978-65-02-38868-6.
+
+- **Paperback (Amazon):** [amazon.com/dp/650238868X](https://www.amazon.com/dp/650238868X)
+- **Kindle:** [amazon.com/dp/B0HKNZR9FW](https://www.amazon.com/dp/B0HKNZR9FW)
+- **Código dos laboratórios:** [github.com/dotpas/book-dext-web](https://github.com/dotpas/book-dext-web)
+
+### 🇧🇷 Edição em português
+
 **Desenvolvimento Web Profissional com Delphi e Dext Framework** — Cesar Romero, 1ª edição, 2026. ISBN 978-65-02-32503-2.
 
 - **Impresso no Brasil (UICLAP):** [loja.uiclap.com/titulo/ua197387](https://loja.uiclap.com/titulo/ua197387)
@@ -53,8 +63,6 @@ Não é um catálogo de features. É um produto corporativo real — o **Dext Fa
 - **Kindle (Brasil):** [amazon.com.br/dp/B0HGYTSYYY](https://www.amazon.com.br/dp/B0HGYTSYYY)
 - **Kindle (global):** [amazon.com/dp/B0HGYTSYYY](https://www.amazon.com/dp/B0HGYTSYYY)
 - **Código dos laboratórios:** [github.com/dotpas/book-dext-web](https://github.com/dotpas/book-dext-web)
-
-A edição em inglês está em revisão final.
 
 ---
 
