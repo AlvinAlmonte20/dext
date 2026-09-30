@@ -5743,7 +5743,7 @@ begin
     else if NameIndex > Index then
       Dec(FSortedNames[SortIndex]);
   end;
-  if (FFirstUnsortedNameIndex <> -1) and (FFirstUnsortedNameIndex < Index) then
+  if (FFirstUnsortedNameIndex <> -1) and (Index < FFirstUnsortedNameIndex) then
     Dec(FFirstUnsortedNameIndex);
 
   FNames[Index] := '';
