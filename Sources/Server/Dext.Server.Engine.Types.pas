@@ -79,6 +79,12 @@ type
     SslCertStoreName: string;
     /// <summary>Administrative owner of an http.sys SSL binding.</summary>
     HttpSysAppId: TGUID;
+    /// <summary>
+    ///   Validate the http.sys SSL binding at startup (default: True). Set it to
+    ///   False when the bindings are managed outside the service (IIS, win-acme,
+    ///   Group Policy, central certificate store).
+    /// </summary>
+    ValidateSslBinding: Boolean;
     /// <summary>Base path prefix (e.g. '/myapp').</summary>
     PathBase: string;
 
@@ -94,6 +100,8 @@ type
     function WithHttps(AValue: Boolean = True): TServerEngineOptions;
     /// <summary>Configures the SSL Certificate Hash (Thumbprint) for Windows Schannel / http.sys.</summary>
     function WithSslCertHash(const AHash: string): TServerEngineOptions;
+    /// <summary>Enables or disables the http.sys SSL binding validation at startup.</summary>
+    function WithSslBindingValidation(AValue: Boolean = True): TServerEngineOptions;
     /// <summary>Configures the number of worker I/O threads.</summary>
     /// <param name="ACount">Number of threads (0 for CPU count auto-detection).</param>
     function WithIoThreads(ACount: Integer): TServerEngineOptions;
@@ -164,6 +172,7 @@ begin
   Result.SslCertStoreName := 'MY';
   Result.SslProvider := 'Auto';
   Result.HttpSysAppId := TGUID.Empty;
+  Result.ValidateSslBinding := True;
   Result.PathBase := '';
 end;
 
@@ -183,6 +192,12 @@ end;
 function TServerEngineOptionsHelper.WithSslCertHash(const AHash: string): TServerEngineOptions;
 begin
   Self.SslCertHash := AHash;
+  Result := Self;
+end;
+
+function TServerEngineOptionsHelper.WithSslBindingValidation(AValue: Boolean): TServerEngineOptions;
+begin
+  Self.ValidateSslBinding := AValue;
   Result := Self;
 end;
 

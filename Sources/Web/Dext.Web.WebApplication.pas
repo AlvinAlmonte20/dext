@@ -763,6 +763,8 @@ begin
         raise EArgumentException.Create(
           'Server:HttpSysAppId must be a valid GUID');
       end;
+    if SameText(ServerSec['ValidateSslBinding'], 'false') then
+      Opts.ValidateSslBinding := False;
     if (ServerSec['PathBase'] <> '') and (Opts.PathBase = '') then
       Opts.PathBase := ServerSec['PathBase'];
   end;

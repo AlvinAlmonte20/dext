@@ -2780,17 +2780,26 @@ procedure TDextHttpSysEngine.RegisterSslBinding;
 const
   ERROR_FILE_NOT_FOUND = 2;
   ERROR_INSUFFICIENT_BUFFER = 122;
+  ERROR_NO_MORE_ITEMS = 259;
+  // HTTP_SERVICE_CONFIG_SSL_PARAM: a NULL pSslCertStoreName means "MY".
+  DEFAULT_CERT_STORE = 'MY';
+  SKIP_HINT = ', or set ValidateSslBinding to False if the bindings are managed outside the service';
 var
   Address: SOCKADDR_IN;
+  IsWildcard: Boolean;
+  IsHostName: Boolean;
+  DisplayAddress: string;
+  BindingText: string;
   Query: HTTP_SERVICE_CONFIG_SSL_QUERY;
   Binding: PHTTP_SERVICE_CONFIG_SSL_SET;
+  SniQuery: HTTP_SERVICE_CONFIG_SSL_SNI_QUERY;
+  SniBinding: PHTTP_SERVICE_CONFIG_SSL_SNI_SET;
   Buffer: TBytes;
-  Required: ULONG;
   Ret: ULONG;
-  ActualHash: string;
-  ExpectedHash: string;
-  ActualStore: string;
-  I: Integer;
+  Token: DWORD;
+  Mismatch: string;
+  FirstMismatch: string;
+  SniOnPort: Integer;
 
   function NormalizeHash(const Value: string): string;
   var
@@ -2806,81 +2815,211 @@ var
   begin
     Result := IsEqualGUID(Value, TGUID.Empty);
   end;
+
+  function BindingHash(const AParam: HTTP_SERVICE_CONFIG_SSL_PARAM): string;
+  var
+    I: Integer;
+  begin
+    Result := '';
+    for I := 0 to Integer(AParam.CertHashLength) - 1 do
+      Result := Result +
+        IntToHex(PByte(NativeUInt(AParam.pCertHash) + NativeUInt(I))^, 2);
+  end;
+
+  function BindingStore(const AParam: HTTP_SERVICE_CONFIG_SSL_PARAM): string;
+  begin
+    if AParam.pCertStoreName <> nil then
+      Result := AParam.pCertStoreName
+    else
+      Result := DEFAULT_CERT_STORE;
+  end;
+
+  // Compares a binding with the configured expectations; an empty expectation
+  // is not checked. Returns '' when the binding matches, the reason otherwise.
+  function CheckBinding(const AParam: HTTP_SERVICE_CONFIG_SSL_PARAM;
+    const ABindingText: string): string;
+  var
+    ExpectedHash: string;
+  begin
+    Result := '';
+    ExpectedHash := NormalizeHash(FOptions.SslCertHash);
+    if (ExpectedHash <> '') and not SameText(ExpectedHash, BindingHash(AParam)) then
+      Exit(Format('http.sys SSL binding certificate mismatch for %s. Expected %s, found %s',
+        [ABindingText, ExpectedHash, BindingHash(AParam)]));
+    if (FOptions.SslCertStoreName <> '') and
+       not SameText(FOptions.SslCertStoreName, BindingStore(AParam)) then
+      Exit(Format('http.sys SSL binding store mismatch for %s. Expected %s, found %s',
+        [ABindingText, FOptions.SslCertStoreName, BindingStore(AParam)]));
+    if not IsEmptyGuid(FOptions.HttpSysAppId) and
+       not IsEqualGUID(FOptions.HttpSysAppId, AParam.AppId) then
+      Exit(Format('http.sys SSL binding AppId mismatch for %s. Expected %s, found %s',
+        [ABindingText, GUIDToString(FOptions.HttpSysAppId), GUIDToString(AParam.AppId)]));
+  end;
+
+  procedure AcceptBinding(const AParam: HTTP_SERVICE_CONFIG_SSL_PARAM;
+    const ABindingText: string);
+  var
+    Reason: string;
+  begin
+    Reason := CheckBinding(AParam, ABindingText);
+    if Reason <> '' then
+      raise EInvalidOperation.Create(Reason);
+    SafeWriteLn(Format(
+      '[http.sys] Validated HTTPS binding %s (certificate %s, store %s, AppId %s)',
+      [ABindingText, BindingHash(AParam), BindingStore(AParam),
+       GUIDToString(AParam.AppId)]));
+  end;
+
+  // Size query, then read. Returns ERROR_SUCCESS with ABuffer filled, or the
+  // error of the query (ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_ITEMS, ...).
+  function QueryBinding(AConfigId: HTTP_SERVICE_CONFIG_ID; AQuery: Pointer;
+    AQuerySize: ULONG; out ABuffer: TBytes): ULONG;
+  var
+    Required: ULONG;
+  begin
+    ABuffer := nil;
+    Required := 0;
+    Result := HttpQueryServiceConfiguration(0, Ord(AConfigId), AQuery, AQuerySize,
+      nil, 0, Required, nil);
+    if (Result <> ERROR_INSUFFICIENT_BUFFER) or (Required = 0) then
+      Exit;
+    SetLength(ABuffer, Required);
+    Result := HttpQueryServiceConfiguration(0, Ord(AConfigId), AQuery, AQuerySize,
+      Pointer(ABuffer), Length(ABuffer), Required, nil);
+  end;
+
 begin
-  if not FOptions.UseHttps then Exit;
+  if not FOptions.UseHttps then
+    Exit;
+  if not FOptions.ValidateSslBinding then
+  begin
+    SafeWriteLn(Format(
+      '[http.sys] HTTPS binding validation skipped for port %d (ValidateSslBinding = False)',
+      [FListeningPort]));
+    Exit;
+  end;
+
+  // The bind address is the wildcard, an IPv4 address or a host name.
+  FillChar(Address, SizeOf(Address), 0);
+  Address.sin_family := AF_INET;
+  Address.sin_port := htons(FListeningPort);
+  IsWildcard := (FAddress = '') or (FAddress = '+') or (FAddress = '*') or
+    (FAddress = '0.0.0.0');
+  IsHostName := False;
+  if not IsWildcard then
+  begin
+    if Pos(':', FAddress) > 0 then
+      raise EArgumentException.CreateFmt(
+        'http.sys HTTPS binding validation requires an IPv4 address or a host name; received "%s"',
+        [FAddress]);
+    Address.sin_addr := inet_addr(PAnsiChar(AnsiString(FAddress)));
+    IsHostName := Address.sin_addr = INADDR_NONE;
+  end;
+  if IsWildcard then
+    DisplayAddress := '0.0.0.0'
+  else
+    DisplayAddress := FAddress;
 
   Ret := HttpInitialize(HTTPAPI_VERSION_2, HTTP_INITIALIZE_CONFIG, nil);
   if Ret <> ERROR_SUCCESS then
     raise EOSError.CreateFmt(
       'HttpInitialize(CONFIG) failed while validating HTTPS binding (error %d)', [Ret]);
   try
-    FillChar(Address, SizeOf(Address), 0);
-    Address.sin_family := AF_INET;
-    Address.sin_port := htons(FListeningPort);
-    if (FAddress <> '') and (FAddress <> '+') and (FAddress <> '0.0.0.0') then
+    // 1. IP:port binding (netsh http add sslcert ipport=...). For a specific
+    //    IPv4 address http.sys falls back to the 0.0.0.0:port binding.
+    if not IsHostName then
     begin
-      Address.sin_addr := inet_addr(PAnsiChar(AnsiString(FAddress)));
-      if Address.sin_addr = INADDR_NONE then
-        raise EArgumentException.CreateFmt(
-          'http.sys HTTPS binding validation requires an IPv4 address; received "%s"',
-          [FAddress]);
+      FillChar(Query, SizeOf(Query), 0);
+      Query.QueryDesc := HttpServiceConfigQueryExact;
+      Query.KeyDesc.pIpPort := @Address;
+      Ret := QueryBinding(HttpServiceConfigSslCertInfo, @Query, SizeOf(Query), Buffer);
+      if (Ret = ERROR_FILE_NOT_FOUND) and not IsWildcard then
+      begin
+        Address.sin_addr := 0;
+        Ret := QueryBinding(HttpServiceConfigSslCertInfo, @Query, SizeOf(Query), Buffer);
+        if Ret = ERROR_SUCCESS then
+          DisplayAddress := '0.0.0.0';
+      end;
+      if Ret = ERROR_SUCCESS then
+      begin
+        Binding := PHTTP_SERVICE_CONFIG_SSL_SET(Pointer(Buffer));
+        AcceptBinding(Binding.ParamDesc,
+          Format('%s:%d', [DisplayAddress, FListeningPort]));
+        Exit;
+      end;
+      if Ret <> ERROR_FILE_NOT_FOUND then
+        raise EOSError.CreateFmt(
+          'Unable to query http.sys SSL binding for %s:%d (error %d)',
+          [DisplayAddress, FListeningPort, Ret]);
     end;
 
-    FillChar(Query, SizeOf(Query), 0);
-    Query.QueryDesc := HttpServiceConfigQueryExact;
-    Query.KeyDesc.pIpPort := @Address;
-    Required := 0;
-    Ret := HttpQueryServiceConfiguration(0, Ord(HttpServiceConfigSslCertInfo),
-      @Query, SizeOf(Query), nil, 0, Required, nil);
-    if Ret = ERROR_FILE_NOT_FOUND then
+    // 2. Host name (SNI) bindings (netsh http add sslcert hostnameport=...).
+    //    Their address is the wildcard: only the port and the host count.
+    FillChar(SniQuery, SizeOf(SniQuery), 0);
+    PSOCKADDR_IN(@SniQuery.KeyDesc.IpPort)^.sin_family := AF_INET;
+    PSOCKADDR_IN(@SniQuery.KeyDesc.IpPort)^.sin_port := htons(FListeningPort);
+
+    if IsHostName then
+    begin
+      SniQuery.QueryDesc := HttpServiceConfigQueryExact;
+      SniQuery.KeyDesc.Host := PWideChar(FAddress);
+      Ret := QueryBinding(HttpServiceConfigSslSniCertInfo, @SniQuery,
+        SizeOf(SniQuery), Buffer);
+      if Ret = ERROR_FILE_NOT_FOUND then
+        raise EInvalidOperation.CreateFmt(
+          'No http.sys SSL binding exists for host name %s:%d. Inspect or provision it with: netsh http show sslcert hostnameport=%s:%d' + SKIP_HINT,
+          [FAddress, FListeningPort, FAddress, FListeningPort]);
+      if Ret <> ERROR_SUCCESS then
+        raise EOSError.CreateFmt(
+          'Unable to query http.sys SSL binding for host name %s:%d (error %d)',
+          [FAddress, FListeningPort, Ret]);
+      SniBinding := PHTTP_SERVICE_CONFIG_SSL_SNI_SET(Pointer(Buffer));
+      AcceptBinding(SniBinding.ParamDesc,
+        Format('host name %s:%d', [FAddress, FListeningPort]));
+      Exit;
+    end;
+
+    // Wildcard or IPv4 address without an IP:port binding: a host name binding
+    // on the same port serves the prefix too, chosen by the client's SNI.
+    SniQuery.QueryDesc := HttpServiceConfigQueryNext;
+    FirstMismatch := '';
+    SniOnPort := 0;
+    Token := 0;
+    while True do
+    begin
+      SniQuery.dwToken := Token;
+      Ret := QueryBinding(HttpServiceConfigSslSniCertInfo, @SniQuery,
+        SizeOf(SniQuery), Buffer);
+      if Ret = ERROR_NO_MORE_ITEMS then
+        Break;
+      if Ret <> ERROR_SUCCESS then
+        raise EOSError.CreateFmt(
+          'Unable to enumerate http.sys host name SSL bindings (error %d)', [Ret]);
+      Inc(Token);
+
+      SniBinding := PHTTP_SERVICE_CONFIG_SSL_SNI_SET(Pointer(Buffer));
+      if ntohs(PSOCKADDR_IN(@SniBinding.KeyDesc.IpPort)^.sin_port) <> FListeningPort then
+        Continue;
+      Inc(SniOnPort);
+      BindingText := Format('host name %s:%d',
+        [string(SniBinding.KeyDesc.Host), FListeningPort]);
+      Mismatch := CheckBinding(SniBinding.ParamDesc, BindingText);
+      if Mismatch = '' then
+      begin
+        AcceptBinding(SniBinding.ParamDesc, BindingText);
+        Exit;
+      end;
+      if FirstMismatch = '' then
+        FirstMismatch := Mismatch;
+    end;
+
+    if SniOnPort > 0 then
       raise EInvalidOperation.CreateFmt(
-        'No http.sys SSL binding exists for %s:%d. Inspect or provision it with: netsh http show sslcert ipport=%s:%d',
-        [FAddress, FListeningPort, FAddress, FListeningPort]);
-    if (Ret <> ERROR_INSUFFICIENT_BUFFER) or (Required = 0) then
-      raise EOSError.CreateFmt(
-        'Unable to query http.sys SSL binding for %s:%d (error %d)',
-        [FAddress, FListeningPort, Ret]);
-
-    SetLength(Buffer, Required);
-    Ret := HttpQueryServiceConfiguration(0, Ord(HttpServiceConfigSslCertInfo),
-      @Query, SizeOf(Query), Pointer(Buffer), Length(Buffer), Required, nil);
-    if Ret <> ERROR_SUCCESS then
-      raise EOSError.CreateFmt(
-        'Unable to read http.sys SSL binding for %s:%d (error %d)',
-        [FAddress, FListeningPort, Ret]);
-
-    Binding := PHTTP_SERVICE_CONFIG_SSL_SET(Pointer(Buffer));
-    ActualHash := '';
-    for I := 0 to Integer(Binding.ParamDesc.CertHashLength) - 1 do
-      ActualHash := ActualHash +
-        IntToHex(PByte(NativeUInt(Binding.ParamDesc.pCertHash) + NativeUInt(I))^, 2);
-    ExpectedHash := NormalizeHash(FOptions.SslCertHash);
-    if (ExpectedHash <> '') and not SameText(ExpectedHash, ActualHash) then
-      raise EInvalidOperation.CreateFmt(
-        'http.sys SSL binding certificate mismatch for %s:%d. Expected %s, found %s',
-        [FAddress, FListeningPort, ExpectedHash, ActualHash]);
-
-    if Binding.ParamDesc.pCertStoreName <> nil then
-      ActualStore := Binding.ParamDesc.pCertStoreName
-    else
-      ActualStore := '';
-    if (FOptions.SslCertStoreName <> '') and
-       not SameText(FOptions.SslCertStoreName, ActualStore) then
-      raise EInvalidOperation.CreateFmt(
-        'http.sys SSL binding store mismatch for %s:%d. Expected %s, found %s',
-        [FAddress, FListeningPort, FOptions.SslCertStoreName, ActualStore]);
-
-    if not IsEmptyGuid(FOptions.HttpSysAppId) and
-       not IsEqualGUID(FOptions.HttpSysAppId, Binding.ParamDesc.AppId) then
-      raise EInvalidOperation.CreateFmt(
-        'http.sys SSL binding AppId mismatch for %s:%d. Expected %s, found %s',
-        [FAddress, FListeningPort, GUIDToString(FOptions.HttpSysAppId),
-         GUIDToString(Binding.ParamDesc.AppId)]);
-
-    SafeWriteLn(Format(
-      '[http.sys] Validated HTTPS binding %s:%d (certificate %s, store %s, AppId %s)',
-      [FAddress, FListeningPort, ActualHash, ActualStore,
-       GUIDToString(Binding.ParamDesc.AppId)]));
+        'No http.sys SSL binding for %s:%d, and none of the %d host name bindings on port %d matches the configuration. First: %s',
+        [DisplayAddress, FListeningPort, SniOnPort, FListeningPort, FirstMismatch]);
+    raise EInvalidOperation.CreateFmt(
+      'No http.sys SSL binding exists for %s:%d, nor a host name binding on port %d. Inspect or provision it with: netsh http show sslcert ipport=%s:%d' + SKIP_HINT,
+      [DisplayAddress, FListeningPort, FListeningPort, DisplayAddress, FListeningPort]);
   finally
     HttpTerminate(HTTP_INITIALIZE_CONFIG, nil);
   end;
