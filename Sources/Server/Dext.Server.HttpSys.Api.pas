@@ -461,6 +461,9 @@ type
     HttpServiceConfigSslCertInfo,
     HttpServiceConfigUrlAclInfo,
     HttpServiceConfigTimeout,
+    HttpServiceConfigCache,
+    HttpServiceConfigSslSniCertInfo,  // Hostname (SNI) bindings, Windows 8+.
+    HttpServiceConfigSslCcsCertInfo,  // Central certificate store bindings.
     HttpServiceConfigMax
   );
 
@@ -518,6 +521,25 @@ type
   HTTP_SERVICE_CONFIG_SSL_QUERY = record
     QueryDesc: HTTP_SERVICE_CONFIG_QUERY_TYPE;
     KeyDesc: HTTP_SERVICE_CONFIG_SSL_KEY;
+    dwToken: DWORD;
+  end;
+
+  // Hostname (SNI) binding: the address in IpPort is the wildcard
+  // (0.0.0.0 or ::), only its port is significant.
+  HTTP_SERVICE_CONFIG_SSL_SNI_KEY = record
+    IpPort: SOCKADDR_STORAGE;
+    Host: PWideChar;
+  end;
+
+  HTTP_SERVICE_CONFIG_SSL_SNI_SET = record
+    KeyDesc: HTTP_SERVICE_CONFIG_SSL_SNI_KEY;
+    ParamDesc: HTTP_SERVICE_CONFIG_SSL_PARAM;
+  end;
+  PHTTP_SERVICE_CONFIG_SSL_SNI_SET = ^HTTP_SERVICE_CONFIG_SSL_SNI_SET;
+
+  HTTP_SERVICE_CONFIG_SSL_SNI_QUERY = record
+    QueryDesc: HTTP_SERVICE_CONFIG_QUERY_TYPE;
+    KeyDesc: HTTP_SERVICE_CONFIG_SSL_SNI_KEY;
     dwToken: DWORD;
   end;
 
