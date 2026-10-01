@@ -2188,18 +2188,55 @@ begin
   Init(AEngine, ARequest, AReqQueue);
 end;
 
+/// <summary>
+///   Reads the textual address and the port of a SOCKADDR filled by http.sys
+///   (HTTP_REQUEST.Address). Returns False, with an empty address and a zero
+///   port, when the pointer is nil or the family is neither AF_INET nor AF_INET6.
+/// </summary>
+function TryReadSockAddr(AAddr: PSockAddr; out AAddress: string;
+  out APort: Word): Boolean;
+var
+  Buffer: array[0..64] of WideChar; // INET6_ADDRSTRLEN = 65
+  RawAddr: Pointer;
+begin
+  Result := False;
+  AAddress := '';
+  APort := 0;
+  if AAddr = nil then
+    Exit;
+
+  case AAddr^.sa_family of
+    AF_INET:
+      begin
+        APort := ntohs(PSockAddrIn(AAddr)^.sin_port);
+        RawAddr := @PSockAddrIn(AAddr)^.sin_addr;
+      end;
+    AF_INET6:
+      begin
+        APort := ntohs(PSOCKADDR_IN6(AAddr)^.sin6_port);
+        RawAddr := @PSOCKADDR_IN6(AAddr)^.sin6_addr;
+      end;
+  else
+    Exit;
+  end;
+
+  if InetNtopW(AAddr^.sa_family, RawAddr, @Buffer[0], Length(Buffer)) <> nil then
+    AAddress := Buffer;
+  Result := True;
+end;
+
 procedure TDextHttpSysConnection.Init(AEngine: TDextHttpSysEngine;
   const ARequest: HTTP_REQUEST; AReqQueue: THandle);
 var
   I: Integer;
   UnknownName: string;
+  LocalAddress: string;
 begin
   FEngine := AEngine;
   FConnectionId := ARequest.ConnectionId;
   FSecure := ARequest.pSslInfo <> nil;
-  FLocalPort := 80;
-  FRemotePort := 0;
-  FRemoteAddress := '';
+  TryReadSockAddr(ARequest.Address.pRemoteAddress, FRemoteAddress, FRemotePort);
+  TryReadSockAddr(ARequest.Address.pLocalAddress, LocalAddress, FLocalPort);
   FReqQueue := AReqQueue;
   FRequestId := ARequest.RequestId;
 

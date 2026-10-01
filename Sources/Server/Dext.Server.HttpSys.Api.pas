@@ -36,7 +36,8 @@ interface
 
 {$IFDEF MSWINDOWS}
 uses
-  Winapi.Windows;
+  Winapi.Windows,
+  Winapi.Winsock2;
 
 const
   HTTPAPI_DLL = 'httpapi.dll';
@@ -119,11 +120,24 @@ type
     pQueryString: PWideChar;
   end;
 
-  PNetAddr = Pointer; // Placeholder for sock address representation
+  // Winapi.Winsock2 declares sockaddr_in (IPv4) but not sockaddr_in6, so the
+  // IPv6 layout is declared here (ws2ipdef.h, 28 bytes).
+  SOCKADDR_IN6 = record
+    sin6_family: u_short;
+    sin6_port: u_short;
+    sin6_flowinfo: ULONG;
+    sin6_addr: array[0..15] of Byte;
+    sin6_scope_id: ULONG;
+  end;
+  PSOCKADDR_IN6 = ^SOCKADDR_IN6;
 
+  // Kept as an alias for source compatibility: it used to be an untyped placeholder.
+  PNetAddr = PSockAddr;
+
+  // Both pointers reference a SOCKADDR whose sa_family is AF_INET or AF_INET6.
   HTTP_TRANSPORT_ADDRESS = record
-    pRemoteAddress: PNetAddr;
-    pLocalAddress: PNetAddr;
+    pRemoteAddress: PSockAddr;
+    pLocalAddress: PSockAddr;
   end;
 
   HTTP_UNKNOWN_HEADER = record
@@ -514,6 +528,11 @@ function HttpQueryServiceConfiguration(ServiceHandle: THandle; ConfigId: DWORD;
   pOutputConfigInfo: Pointer; OutputConfigInfoLength: ULONG;
   var pReturnLength: ULONG; pOverlapped: Pointer): ULONG; stdcall; external HTTPAPI_DLL;
 function HttpSetUrlGroupProperty(UrlGroupId: HTTP_URL_GROUP_ID; PropertyId: HTTP_SERVER_PROPERTY; pPropertyInformation: Pointer; PropertyInformationLength: ULONG): ULONG; stdcall; external HTTPAPI_DLL;
+
+// Not declared by Winapi.Winsock2 (which only has the ANSI inet_ntop).
+// Available since Windows Vista.
+function InetNtopW(Family: Integer; pAddr: Pointer; pStringBuf: PWideChar;
+  StringBufSize: SIZE_T): PWideChar; stdcall; external 'ws2_32.dll' name 'InetNtopW';
 {$ENDIF}
 
 implementation
