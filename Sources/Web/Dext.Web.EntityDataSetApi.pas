@@ -58,19 +58,41 @@ type
   /// </summary>
   TDbContextEntityDataSetStore = class(TInterfacedObject, IEntityDataSetStore)
   private
+    FContinueOnError: Boolean;
     function GetEntityKeys(AEntity: TObject;
       Map: TEntityMap): IDictionary<string, Variant>;
     function ReadPropertyValue(AEntity: TObject;
       PropMap: TPropertyMap; out Value: Variant): Boolean;
     procedure SetPropertyValue(AEntity: TObject;
       PropMap: TPropertyMap; const Value: Variant);
+    function StageChange(AEntityClass: TClass; Map: TEntityMap;
+      const AChange: IDextJsonObject; ADbContext: TDbContext): TObject;
+    function ApplyAtomic(AEntityClass: TClass; const AChanges: IDextJsonArray;
+      ADbContext: TDbContext): IList<TApplyItemResult>;
+    function ApplyEachItem(AEntityClass: TClass; const AChanges: IDextJsonArray;
+      ADbContext: TDbContext): IList<TApplyItemResult>;
   public
     /// <summary>
+    /// Creates the store. By default a batch is applied all-or-nothing.
+    /// </summary>
+    /// <param name="AContinueOnError">See ContinueOnError.</param>
+    constructor Create(AContinueOnError: Boolean = False);
+    /// <summary>
     /// Persists changes using the ORM DbContext SaveChanges.
+    /// By default the whole batch is staged and saved with a single
+    /// SaveChanges, in one transaction (the context's own, or the caller's if
+    /// one is open): if any item fails, nothing is applied and every item is
+    /// reported as failed. With ContinueOnError each item is saved on its own.
     /// </summary>
     function ApplyChanges(AEntityClass: TClass;
       const AChanges: IDextJsonArray;
       ADbContext: TDbContext): IList<TApplyItemResult>;
+    /// <summary>
+    /// Opt-in partial success: each item is saved with its own SaveChanges,
+    /// and a failing item is detached so that later items do not retry it.
+    /// Items applied before a failure stay committed. Default: False.
+    /// </summary>
+    property ContinueOnError: Boolean read FContinueOnError write FContinueOnError;
   end;
 
   /// <summary>
@@ -217,72 +239,65 @@ begin
   end;
 end;
 
-function TDbContextEntityDataSetStore.ApplyChanges(AEntityClass: TClass;
-  const AChanges: IDextJsonArray;
-  ADbContext: TDbContext): IList<TApplyItemResult>;
+constructor TDbContextEntityDataSetStore.Create(AContinueOnError: Boolean);
+begin
+  inherited Create;
+  FContinueOnError := AContinueOnError;
+end;
+
+function TDbContextEntityDataSetStore.StageChange(AEntityClass: TClass;
+  Map: TEntityMap; const AChange: IDextJsonObject;
+  ADbContext: TDbContext): TObject;
 var
-  Results: IList<TApplyItemResult>;
-  ItemResult: TApplyItemResult;
-  ChangeObj: IDextJsonObject;
   StateStr: string;
   KeysObj: IDextJsonObject;
   ValuesObj: IDextJsonObject;
   EntityObj: TObject;
-  Map: TEntityMap;
   Pair: TPair<string, TPropertyMap>;
-  i: Integer;
 begin
-  Results := TCollections.CreateList<TApplyItemResult>;
-  Map := ADbContext.ModelBuilder.GetMap(AEntityClass.ClassInfo);
+  Result := nil;
+  StateStr := AChange.GetString('state');
+  if not (SameText(StateStr, 'inserted') or SameText(StateStr, 'modified') or
+    SameText(StateStr, 'deleted')) then
+    Exit;
 
-  for i := 0 to AChanges.Count - 1 do
-  begin
-    ChangeObj := AChanges.GetObject(i);
-    StateStr := ChangeObj.GetString('state');
-    KeysObj := nil;
-    if ChangeObj.Contains('key') then
-      KeysObj := ChangeObj.GetObject('key');
-    ValuesObj := nil;
-    if ChangeObj.Contains('values') then
-      ValuesObj := ChangeObj.GetObject('values');
+  KeysObj := nil;
+  if AChange.Contains('key') then
+    KeysObj := AChange.GetObject('key');
+  ValuesObj := nil;
+  if AChange.Contains('values') then
+    ValuesObj := AChange.GetObject('values');
 
-    ItemResult.Index := i;
-    ItemResult.Success := True;
-    ItemResult.ErrorMessage := '';
-    ItemResult.Keys := nil;
-
-    try
-      if SameText(StateStr, 'inserted') then
+  EntityObj := AEntityClass.Create;
+  try
+    if SameText(StateStr, 'inserted') then
+    begin
+      if (ValuesObj <> nil) and (Map <> nil) then
       begin
-        EntityObj := AEntityClass.Create;
-        if (ValuesObj <> nil) and (Map <> nil) then
+        for Pair in Map.Properties do
         begin
-          for Pair in Map.Properties do
-          begin
-            if ValuesObj.Contains(Pair.Key) then
-              SetPropertyValue(EntityObj, Pair.Value,
-                ValuesObj.GetString(Pair.Key));
-          end;
+          if ValuesObj.Contains(Pair.Key) then
+            SetPropertyValue(EntityObj, Pair.Value,
+              ValuesObj.GetString(Pair.Key));
         end;
+      end;
 
-        ADbContext.ChangeTracker.Track(EntityObj, esAdded);
-        ADbContext.SaveChanges;
-
-        ItemResult.Keys := GetEntityKeys(EntityObj, Map);
-      end
-      else if SameText(StateStr, 'modified') then
+      ADbContext.ChangeTracker.Track(EntityObj, esAdded);
+    end
+    else
+    begin
+      if (KeysObj <> nil) and (Map <> nil) then
       begin
-        EntityObj := AEntityClass.Create;
-        if (KeysObj <> nil) and (Map <> nil) then
+        for Pair in Map.Properties do
         begin
-          for Pair in Map.Properties do
-          begin
-            if Pair.Value.IsPK and KeysObj.Contains(Pair.Key) then
-              SetPropertyValue(EntityObj, Pair.Value,
-                KeysObj.GetString(Pair.Key));
-          end;
+          if Pair.Value.IsPK and KeysObj.Contains(Pair.Key) then
+            SetPropertyValue(EntityObj, Pair.Value,
+              KeysObj.GetString(Pair.Key));
         end;
+      end;
 
+      if SameText(StateStr, 'modified') then
+      begin
         ADbContext.ChangeTracker.Track(EntityObj, esUnchanged);
 
         if (ValuesObj <> nil) and (Map <> nil) then
@@ -297,30 +312,132 @@ begin
             end;
           end;
         end;
-
-        ADbContext.SaveChanges;
       end
-      else if SameText(StateStr, 'deleted') then
-      begin
-        EntityObj := AEntityClass.Create;
-        if (KeysObj <> nil) and (Map <> nil) then
-        begin
-          for Pair in Map.Properties do
-          begin
-            if Pair.Value.IsPK and KeysObj.Contains(Pair.Key) then
-              SetPropertyValue(EntityObj, Pair.Value,
-                KeysObj.GetString(Pair.Key));
-          end;
-        end;
-
+      else
         ADbContext.ChangeTracker.Track(EntityObj, esDeleted);
+    end;
+  except
+    // Not saved yet, so nothing else references it.
+    ADbContext.ChangeTracker.Remove(EntityObj);
+    EntityObj.Free;
+    raise;
+  end;
+  Result := EntityObj;
+end;
+
+function TDbContextEntityDataSetStore.ApplyAtomic(AEntityClass: TClass;
+  const AChanges: IDextJsonArray;
+  ADbContext: TDbContext): IList<TApplyItemResult>;
+var
+  Results: IList<TApplyItemResult>;
+  ItemResult: TApplyItemResult;
+  Entities: IList<TObject>;
+  Entity: TObject;
+  Map: TEntityMap;
+  FailedIndex: Integer;
+  ErrorMessage: string;
+  i: Integer;
+begin
+  Results := TCollections.CreateList<TApplyItemResult>;
+  Entities := TCollections.CreateList<TObject>;
+  Map := ADbContext.ModelBuilder.GetMap(AEntityClass.ClassInfo);
+
+  // Stage every item first, then save the whole batch with one SaveChanges:
+  // it runs in a single transaction (its own, or the caller's when one is
+  // open) and rolls back its own transaction if any statement fails.
+  FailedIndex := -1;
+  ErrorMessage := '';
+  try
+    for i := 0 to AChanges.Count - 1 do
+    begin
+      FailedIndex := i;
+      Entities.Add(StageChange(AEntityClass, Map, AChanges.GetObject(i),
+        ADbContext));
+    end;
+    FailedIndex := -1;
+    ADbContext.SaveChanges;
+  except
+    on E: Exception do
+    begin
+      ErrorMessage := E.Message;
+      // A failed SaveChanges leaves the batch tracked: detach it, so that a
+      // later SaveChanges on this context does not try to save it again.
+      for Entity in Entities do
+      begin
+        if Entity <> nil then
+          ADbContext.Detach(Entity);
+      end;
+    end;
+  end;
+
+  for i := 0 to AChanges.Count - 1 do
+  begin
+    ItemResult.Index := i;
+    ItemResult.Keys := nil;
+    if ErrorMessage = '' then
+    begin
+      ItemResult.Success := True;
+      ItemResult.ErrorMessage := '';
+      if (Entities[i] <> nil) and
+        SameText(AChanges.GetObject(i).GetString('state'), 'inserted') then
+        ItemResult.Keys := GetEntityKeys(Entities[i], Map);
+    end
+    else
+    begin
+      ItemResult.Success := False;
+      if FailedIndex < 0 then
+        ItemResult.ErrorMessage := 'Batch not applied: ' + ErrorMessage
+      else if i = FailedIndex then
+        ItemResult.ErrorMessage := ErrorMessage
+      else
+        ItemResult.ErrorMessage := Format('Batch not applied: item %d failed (%s)',
+          [FailedIndex, ErrorMessage]);
+    end;
+    Results.Add(ItemResult);
+  end;
+
+  Result := Results;
+end;
+
+function TDbContextEntityDataSetStore.ApplyEachItem(AEntityClass: TClass;
+  const AChanges: IDextJsonArray;
+  ADbContext: TDbContext): IList<TApplyItemResult>;
+var
+  Results: IList<TApplyItemResult>;
+  ItemResult: TApplyItemResult;
+  EntityObj: TObject;
+  Map: TEntityMap;
+  i: Integer;
+begin
+  Results := TCollections.CreateList<TApplyItemResult>;
+  Map := ADbContext.ModelBuilder.GetMap(AEntityClass.ClassInfo);
+
+  for i := 0 to AChanges.Count - 1 do
+  begin
+    ItemResult.Index := i;
+    ItemResult.Success := True;
+    ItemResult.ErrorMessage := '';
+    ItemResult.Keys := nil;
+
+    EntityObj := nil;
+    try
+      EntityObj := StageChange(AEntityClass, Map, AChanges.GetObject(i),
+        ADbContext);
+      if EntityObj <> nil then
+      begin
         ADbContext.SaveChanges;
+        if SameText(AChanges.GetObject(i).GetString('state'), 'inserted') then
+          ItemResult.Keys := GetEntityKeys(EntityObj, Map);
       end;
     except
       on E: Exception do
       begin
         ItemResult.Success := False;
         ItemResult.ErrorMessage := E.Message;
+        // The failed entity is still tracked: detach it, or the next item's
+        // SaveChanges would try to save it again.
+        if EntityObj <> nil then
+          ADbContext.Detach(EntityObj);
       end;
     end;
 
@@ -328,6 +445,16 @@ begin
   end;
 
   Result := Results;
+end;
+
+function TDbContextEntityDataSetStore.ApplyChanges(AEntityClass: TClass;
+  const AChanges: IDextJsonArray;
+  ADbContext: TDbContext): IList<TApplyItemResult>;
+begin
+  if FContinueOnError then
+    Result := ApplyEachItem(AEntityClass, AChanges, ADbContext)
+  else
+    Result := ApplyAtomic(AEntityClass, AChanges, ADbContext);
 end;
 
 { TEntityDataSetApi }
