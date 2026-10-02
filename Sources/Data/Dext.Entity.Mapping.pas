@@ -865,10 +865,14 @@ begin
           // If GetProc points to a field (high-byte $FF), it's a direct field access property (e.g., 'read FCurrencyVal').
           // In this case, we extract the actual memory offset of the private field to enable the 'Fast Path' performance boost.
           // Note: We MUST NOT overwrite offsets for SmartProps (Nullable/Lazy) already detected in the Fields loop.
-          if (not PropMap.IsLazy) and ((NativeInt(LPropInfo.GetProc) and $FF000000) = $FF000000) then
+          // PROPSLOT_MASK/PROPSLOT_FIELD (System.TypInfo) are $FF000000 on 32-bit
+          // and $FF00000000000000 on 64-bit: a fixed $FF000000 never matched a
+          // field getter on Win64.
+          if (not PropMap.IsLazy) and
+             ((IntPtr(LPropInfo.GetProc) and PROPSLOT_MASK) = PROPSLOT_FIELD) then
           begin
             if PropMap.FieldValueOffset <= 0 then
-              PropMap.FieldValueOffset := NativeInt(LPropInfo.GetProc) and $00FFFFFF;
+              PropMap.FieldValueOffset := Integer(IntPtr(LPropInfo.GetProc) and not PROPSLOT_MASK);
           end
           else
           begin
@@ -877,8 +881,8 @@ begin
           end;
 
           // Double check SetProc to ensure it's also a field mapping or a method
-          if (PropMap.FieldValueOffset <> 0) and (NativeInt(LPropInfo.SetProc) <> 0) and 
-             ((NativeInt(LPropInfo.SetProc) and $FF000000) <> $FF000000) then
+          if (PropMap.FieldValueOffset <> 0) and (NativeInt(LPropInfo.SetProc) <> 0) and
+             ((IntPtr(LPropInfo.SetProc) and PROPSLOT_MASK) <> PROPSLOT_FIELD) then
           begin
              PropMap.FieldValueOffset := 0;
           end;

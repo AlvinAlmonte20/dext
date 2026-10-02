@@ -182,6 +182,16 @@ type
     property NullableSmartField: Prop<Nullable<Integer>> read FNullableSmartField write FNullableSmartField;
   end;
 
+  TFieldAccessEntity = class
+  private
+    FPlain: Integer;
+    FComputed: Integer;
+    function GetComputed: Integer;
+  public
+    property Plain: Integer read FPlain write FPlain;
+    property Computed: Integer read GetComputed write FComputed;
+  end;
+
   [TestFixture('Entity Mapping - Nullable Smart Property Warnings')]
   TEntityMappingWarningTests = class
   public
@@ -189,6 +199,8 @@ type
     procedure TestLegacyNullablePropWarning;
     [Test('Should map Prop<Nullable<T>> correctly')]
     procedure TestModernPropNullableMapping;
+    [Test('Should use the field offset for a property that reads a field, also on 64-bit')]
+    procedure TestFieldGetterPropertyGetsFieldOffset;
   end;
 
 implementation
@@ -515,5 +527,39 @@ begin
   end;
 end;
 
-end.
+{ TFieldAccessEntity }
 
+function TFieldAccessEntity.GetComputed: Integer;
+begin
+  Result := FComputed * 2;
+end;
+
+procedure TEntityMappingWarningTests.TestFieldGetterPropertyGetsFieldOffset;
+var
+  LMap: TEntityMap;
+  PropMap: TPropertyMap;
+  Obj: TFieldAccessEntity;
+  ExpectedOffset: Integer;
+begin
+  // A 'read FField' property stores the field offset in GetProc, flagged with
+  // PROPSLOT_FIELD in the high bits: $FF000000 on 32-bit, $FF00000000000000
+  // on 64-bit. A fixed $FF000000 mask never matched on Win64.
+  Obj := TFieldAccessEntity.Create;
+  try
+    ExpectedOffset := Integer(NativeInt(@Obj.FPlain) - NativeInt(Obj));
+  finally
+    Obj.Free;
+  end;
+  LMap := TEntityMap.Create(TypeInfo(TFieldAccessEntity));
+  try
+    Should(LMap.Properties.TryGetValue('Plain', PropMap)).BeTrue;
+    Should(PropMap.FieldValueOffset).Be(ExpectedOffset);
+    // A method getter must not be read from memory.
+    Should(LMap.Properties.TryGetValue('Computed', PropMap)).BeTrue;
+    Should(PropMap.FieldValueOffset).Be(0);
+  finally
+    LMap.Free;
+  end;
+end;
+
+end.
