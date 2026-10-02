@@ -8,6 +8,7 @@ uses
   Dext.Testing.Attributes,
   Dext.Assertions,
   Dext.Core.Span,
+  Dext.Json,
   Dext.Json.Types,
   Dext.Core.Json.NextGen;
 
@@ -35,6 +36,18 @@ type
 
     [Test('Should raise exceptions on invalid JSON syntax')]
     procedure TestValidationExceptions;
+
+    [Test('Should write 3-byte and 4-byte UTF-8 sequences (U+0800 and above, emoji)')]
+    procedure TestWriterUtf8MultiByte;
+
+    [Test('Should keep every character of a string through the writer')]
+    procedure TestWriterUtf8RoundTrip;
+
+    [Test('Should write U+FFFD for unpaired surrogates, also at the end of the string')]
+    procedure TestWriterUnpairedSurrogates;
+
+    [Test('Should keep characters from U+0800 up in TDextJson.Serialize')]
+    procedure TestSerializeKeepsMultiByteChars;
   end;
 
 implementation
@@ -206,6 +219,70 @@ begin
   AssertFail('[0x1]');
   // fail23: Decimal needs digit before dot
   AssertFail('[.1]');
+end;
+
+function BytesToHex(const ABytes: TBytes): string;
+var
+  B: Byte;
+begin
+  Result := '';
+  for B in ABytes do
+    Result := Result + IntToHex(B, 2) + ' ';
+  Result := Trim(Result);
+end;
+
+function WriteString(const AValue: string): TBytes;
+var
+  Writer: TNextGenJsonWriter;
+begin
+  Writer.Init(256);
+  Writer.WriteStringValue(AValue);
+  Result := Writer.ToBytes;
+end;
+
+procedure TJsonNextGenTests.TestWriterUtf8MultiByte;
+begin
+  // U+0800 (first 3-byte), U+20AC euro, U+2014 em dash, U+FFFD,
+  // U+1F600 (a surrogate pair: 4 bytes). Before the fix every one of them
+  // vanished without an error, while U+07FF (2 bytes) was kept.
+  Should(BytesToHex(WriteString(#$07FF))).Be('22 DF BF 22');
+  Should(BytesToHex(WriteString(#$0800))).Be('22 E0 A0 80 22');
+  Should(BytesToHex(WriteString(#$20AC))).Be('22 E2 82 AC 22');
+  Should(BytesToHex(WriteString(#$2014))).Be('22 E2 80 94 22');
+  Should(BytesToHex(WriteString(#$FFFD))).Be('22 EF BF BD 22');
+  Should(BytesToHex(WriteString(#$D83D#$DE00))).Be('22 F0 9F 98 80 22');
+end;
+
+procedure TJsonNextGenTests.TestWriterUtf8RoundTrip;
+const
+  Text = 'A' + #$07FF + 'B' + #$0800 + 'C' + #$20AC + 'D' + #$2014 + 'E' +
+    #$201C + 'quoted' + #$201D + #$2026 + #$3042 + #$D83D#$DE00 + 'F';
+var
+  Writer: TNextGenJsonWriter;
+begin
+  Writer.Init(256);
+  Writer.WriteStringValue(Text);
+  Should(Writer.ToString).Be('"' + Text + '"');
+end;
+
+procedure TJsonNextGenTests.TestWriterUnpairedSurrogates;
+begin
+  // A high surrogate followed by a normal char: U+FFFD, and the char stays.
+  Should(BytesToHex(WriteString(#$D800 + 'A'))).Be('22 EF BF BD 41 22');
+  // A lone low surrogate.
+  Should(BytesToHex(WriteString('A' + #$DC00))).Be('22 41 EF BF BD 22');
+  // A high surrogate at the very end: no read past the string.
+  Should(BytesToHex(WriteString('A' + #$D800))).Be('22 41 EF BF BD 22');
+end;
+
+procedure TJsonNextGenTests.TestSerializeKeepsMultiByteChars;
+const
+  Text = 'Detr. 0,10 ' + #$20AC + ' ' + #$2014 + ' ' + #$D83D#$DE00;
+var
+  Json: string;
+begin
+  Json := TDextJson.Serialize<TArray<string>>([Text]);
+  Should(Json).Be('["' + Text + '"]');
 end;
 
 end.

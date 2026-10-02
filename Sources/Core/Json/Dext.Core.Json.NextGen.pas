@@ -3018,16 +3018,19 @@ begin
           else
           begin
             Val := Ord(C);
-            if (Val >= $D800) and (Val <= $DBFF) then
+            // A high surrogate is combined only with a real low surrogate.
+            // The next char is always readable: at the end of the string it
+            // is the #0 terminator, which is not a low surrogate.
+            C2 := Ord((P + 1)^);
+            if (Val >= $D800) and (Val <= $DBFF) and
+              (C2 >= $DC00) and (C2 <= $DFFF) then
             begin
               Inc(P);
-              if P^ <> #0 then
-              begin
-                C2 := Ord(P^);
-                Val := ((Val - Cardinal($D800)) shl 10) +
-                  (Cardinal(C2) - Cardinal($DC00)) + Cardinal($10000);
-              end;
-            end;
+              Val := ((Val - Cardinal($D800)) shl 10) +
+                (Cardinal(C2) - Cardinal($DC00)) + Cardinal($10000);
+            end
+            else if (Val >= $D800) and (Val <= $DFFF) then
+              Val := $FFFD; // unpaired surrogate: U+FFFD, as Dext.Json.Utf8 does
 
             if Val <= $7F then
             begin
@@ -3036,6 +3039,19 @@ begin
             else if Val <= $7FF then
             begin
               WriteRawByte($C0 or (Val shr 6));
+              WriteRawByte($80 or (Val and $3F));
+            end
+            else if Val <= $FFFF then
+            begin
+              WriteRawByte($E0 or (Val shr 12));
+              WriteRawByte($80 or ((Val shr 6) and $3F));
+              WriteRawByte($80 or (Val and $3F));
+            end
+            else
+            begin
+              WriteRawByte($F0 or (Val shr 18));
+              WriteRawByte($80 or ((Val shr 12) and $3F));
+              WriteRawByte($80 or ((Val shr 6) and $3F));
               WriteRawByte($80 or (Val and $3F));
             end;
           end;
