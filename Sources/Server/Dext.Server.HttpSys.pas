@@ -1020,7 +1020,11 @@ begin
   FillChar(FHeaderValues, SizeOf(FHeaderValues), 0);
   ResetUnknownHeaders;
 
-  FResponseWriter.Reset;
+  // Clear, not Reset: Reset returns the segments but keeps the segment table
+  // grown by GrowSegments, and Init then overwrites the pointer to it. The
+  // table of every reused response larger than 32 segments was lost. Clear
+  // releases it, as the destructor does.
+  FResponseWriter.Clear;
   FResponseWriter.Init;
 
   FSendOp.Kind := hokSendBody;
