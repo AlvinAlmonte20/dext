@@ -66,6 +66,7 @@ begin
         TDataApiSerializationTests,
         THtmxResponseTests,
         TEntityDataSetStoreTests,
+        TEntityDataSetStoreTypesTests,
         TAPMSinksTests,
         TWebSocketTests,
         THttpSysSslBindingTests,

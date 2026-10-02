@@ -73,11 +73,19 @@ type
   private
     FShadowValues: IDictionary<string, TValue>;
     FModifiedProperties: IDictionary<string, Boolean>;
+    FExplicitlyModified: IDictionary<string, Boolean>;
   public
     constructor Create;
     destructor Destroy; override;
     property ShadowValues: IDictionary<string, TValue> read FShadowValues;
     property ModifiedProperties: IDictionary<string, Boolean> read FModifiedProperties;
+    /// <summary>
+    ///   Properties marked with Entry(...).Member(...).IsModified := True.
+    ///   DetectChanges keeps them modified even when the current value equals
+    ///   the snapshot: setting a value back to its default (0, '', False,
+    ///   null) on an entity attached for update is still a change to write.
+    /// </summary>
+    property ExplicitlyModified: IDictionary<string, Boolean> read FExplicitlyModified;
   end;
 
   /// <summary>
@@ -1737,12 +1745,14 @@ constructor TEntityShadowState.Create;
 begin
   FShadowValues := TCollections.CreateDictionary<string, TValue>;
   FModifiedProperties := TCollections.CreateDictionary<string, Boolean>;
+  FExplicitlyModified := TCollections.CreateDictionary<string, Boolean>;
 end;
  
  destructor TEntityShadowState.Destroy;
  begin
    FShadowValues := nil;
    FModifiedProperties := nil;
+   FExplicitlyModified := nil;
    inherited;
  end;
 
@@ -1858,6 +1868,11 @@ begin
         else
           IsModifiedProp := not OriginalVal.IsEmpty;
           
+        // A property marked explicitly stays modified even when its value
+        // equals the snapshot (see TEntityShadowState.ExplicitlyModified).
+        if not IsModifiedProp then
+          IsModifiedProp := State.ExplicitlyModified.ContainsKey(Handler.Name);
+
         if IsModifiedProp then
         begin
           State.ModifiedProperties.AddOrSetValue(Handler.Name, True);
@@ -1908,7 +1923,10 @@ begin
   end;
     
   for LPair in FShadowStates do
+  begin
     LPair.Value.ModifiedProperties.Clear;
+    LPair.Value.ExplicitlyModified.Clear;
+  end;
 end;
 
 procedure TChangeTracker.Clear;
@@ -2023,11 +2041,15 @@ begin
   if AValue then
   begin
     State.ModifiedProperties.AddOrSetValue(FPropName, True);
+    State.ExplicitlyModified.AddOrSetValue(FPropName, True);
     if Tracker.GetState(FEntity) = esUnchanged then
       Tracker.Track(FEntity, esModified);
   end
   else
+  begin
     State.ModifiedProperties.Remove(FPropName);
+    State.ExplicitlyModified.Remove(FPropName);
+  end;
 end;
 
 { TCollectionEntry }
