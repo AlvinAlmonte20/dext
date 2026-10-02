@@ -113,7 +113,115 @@ type
 implementation
 
 uses
+  System.TypInfo,
+  System.DateUtils,
   Dext.Core.Reflection;
+
+/// <summary>
+///   The value of a JSON member as a Variant: null stays Null, a boolean stays
+///   a Boolean, and a string or a number arrives as its text, to be converted
+///   by ConvertToPropertyType. A missing member is Null too.
+/// </summary>
+function JsonMemberValue(const AObject: IDextJsonObject;
+  const AName: string): Variant;
+var
+  Node: IDextJsonNode;
+begin
+  Node := AObject.GetNode(AName);
+  if (Node = nil) or Node.IsNull then
+    Exit(Null);
+  case Node.NodeType of
+    TDextJsonNodeType.jntBoolean:
+      Result := Node.AsBoolean;
+    TDextJsonNodeType.jntString, TDextJsonNodeType.jntNumber:
+      Result := Node.AsString;
+  else
+    Result := Node.ToJson;
+  end;
+end;
+
+/// <summary>
+///   Converts the text of a JSON value to the Variant type of the property.
+///   Numbers and dates are read with the invariant format (JSON always uses a
+///   dot, whatever the machine locale), dates as ISO 8601. A value that cannot
+///   be converted raises EConvertError naming the property, instead of
+///   becoming 0. Null and non-string values are returned unchanged.
+/// </summary>
+function ConvertToPropertyType(const AValue: Variant; ATypeInfo: PTypeInfo;
+  const APropertyName: string): Variant;
+var
+  S: string;
+  I64: Int64;
+  F: Double;
+  C: Currency;
+  D: TDateTime;
+  B: Boolean;
+  Ordinal: Integer;
+
+  procedure Fail;
+  begin
+    raise EConvertError.CreateFmt('Cannot convert "%s" to %s for property "%s"',
+      [S, string(ATypeInfo^.Name), APropertyName]);
+  end;
+
+begin
+  Result := AValue;
+  if (ATypeInfo = nil) or VarIsNull(AValue) or VarIsEmpty(AValue) or
+    not VarIsStr(AValue) then
+    Exit;
+
+  S := VarToStr(AValue);
+  case ATypeInfo^.Kind of
+    tkInteger, tkInt64:
+      begin
+        if not TryStrToInt64(S, I64) then
+          Fail;
+        Result := I64;
+      end;
+    tkEnumeration:
+      if ATypeInfo = TypeInfo(Boolean) then
+      begin
+        if not TryStrToBool(S, B) then
+          Fail;
+        Result := B;
+      end
+      else
+      begin
+        if not TryStrToInt(S, Ordinal) then
+        begin
+          Ordinal := GetEnumValue(ATypeInfo, S);
+          if Ordinal < 0 then
+            Fail;
+        end;
+        Result := Ordinal;
+      end;
+    tkFloat:
+      if (ATypeInfo = TypeInfo(TDateTime)) or (ATypeInfo = TypeInfo(TDate)) or
+        (ATypeInfo = TypeInfo(TTime)) then
+      begin
+        // AReturnUTC = True keeps the value as written: with False a string
+        // without an offset would be shifted to local time.
+        if TryISO8601ToDate(S, D, True) then
+          Result := VarFromDateTime(D)
+        else if TryStrToFloat(S, F, TFormatSettings.Invariant) then
+          Result := VarFromDateTime(F)
+        else
+          Fail;
+      end
+      else if GetTypeData(ATypeInfo)^.FloatType = ftCurr then
+      begin
+        if not TryStrToCurr(S, C, TFormatSettings.Invariant) then
+          Fail;
+        Result := C;
+      end
+      else
+      begin
+        if not TryStrToFloat(S, F, TFormatSettings.Invariant) then
+          Fail;
+        Result := F;
+      end;
+  end;
+end;
 
 { TDbContextEntityDataSetStore }
 
@@ -174,49 +282,65 @@ end;
 procedure TDbContextEntityDataSetStore.SetPropertyValue(AEntity: TObject;
   PropMap: TPropertyMap; const Value: Variant);
 var
+  Typed: Variant;
   PValue: Pointer;
   RttiType: TRttiType;
   RttiProp: TRttiProperty;
+  Cleared: TValue;
 begin
   if (AEntity = nil) or (PropMap = nil) then Exit;
+
+  // The JSON value arrives as text: convert it to the property's type first,
+  // with the invariant format. PropertyType is the inner type for Nullable
+  // and smart properties.
+  Typed := ConvertToPropertyType(Value, PropMap.PropertyType,
+    PropMap.PropertyName);
 
   if PropMap.FieldValueOffset > 0 then
   begin
     if PropMap.FieldOffset > 0 then
       PBoolean(Pointer(PByte(AEntity) + PropMap.FieldOffset))^ :=
-        not VarIsNull(Value);
+        not VarIsNull(Typed);
 
-    if not VarIsNull(Value) then
+    if not VarIsNull(Typed) then
     begin
       PValue := Pointer(PByte(AEntity) + PropMap.FieldValueOffset);
       case PropMap.DataType of
-        ftInteger, ftAutoInc: PInteger(PValue)^ := Value;
-        ftSmallint: PSmallInt(PValue)^ := Value;
-        ftShortint: PShortInt(PValue)^ := Value;
-        ftByte: PByte(PValue)^ := Value;
-        ftWord: PWord(PValue)^ := Value;
-        ftLargeint: PInt64(PValue)^ := Value;
-        ftString, ftWideString: PString(PValue)^ := string(Value);
-        ftFloat: PDouble(PValue)^ := Double(Value);
-        ftCurrency: PCurrency(PValue)^ := Currency(Value);
-        ftBoolean: PBoolean(PValue)^ := Boolean(Value);
-        ftDateTime, ftDate, ftTime: PDateTime(PValue)^ := TDateTime(Value);
+        ftInteger, ftAutoInc: PInteger(PValue)^ := Typed;
+        ftSmallint: PSmallInt(PValue)^ := Typed;
+        ftShortint: PShortInt(PValue)^ := Typed;
+        ftByte: PByte(PValue)^ := Typed;
+        ftWord: PWord(PValue)^ := Typed;
+        ftLargeint: PInt64(PValue)^ := Typed;
+        ftString, ftWideString: PString(PValue)^ := string(Typed);
+        ftFloat: PDouble(PValue)^ := Double(Typed);
+        ftCurrency: PCurrency(PValue)^ := Currency(Typed);
+        ftBoolean: PBoolean(PValue)^ := Boolean(Typed);
+        ftDateTime, ftDate, ftTime: PDateTime(PValue)^ := TDateTime(Typed);
       end;
     end;
+    // The field is written: assigning it again through RTTI would be
+    // redundant, and that second assignment is what failed (#213).
+    Exit;
   end;
 
+  // No direct offset (a getter/setter method, or a property the mapping could
+  // not resolve to a field): go through RTTI, with the value already typed.
   RttiType := TReflection.Context.GetType(AEntity.ClassType);
-  if RttiType <> nil then
+  if RttiType = nil then
+    Exit;
+  RttiProp := RttiType.GetProperty(PropMap.PropertyName);
+  if RttiProp = nil then
+    Exit;
+  if VarIsNull(Typed) then
   begin
-    RttiProp := RttiType.GetProperty(PropMap.PropertyName);
-    if RttiProp <> nil then
-    begin
-      if VarIsNull(Value) then
-        RttiProp.SetValue(AEntity, TValue.Empty)
-      else
-        RttiProp.SetValue(AEntity, TValue.FromVariant(Value));
-    end;
-  end;
+    // The zero value of the property's own type: 0 / '' for a plain
+    // property, "no value" for a Nullable.
+    TValue.Make(nil, RttiProp.PropertyType.Handle, Cleared);
+    RttiProp.SetValue(AEntity, Cleared);
+  end
+  else
+    TReflection.SetValue(AEntity, RttiProp, TValue.FromVariant(Typed));
 end;
 
 function TDbContextEntityDataSetStore.GetEntityKeys(AEntity: TObject;
@@ -278,7 +402,7 @@ begin
         begin
           if ValuesObj.Contains(Pair.Key) then
             SetPropertyValue(EntityObj, Pair.Value,
-              ValuesObj.GetString(Pair.Key));
+              JsonMemberValue(ValuesObj, Pair.Key));
         end;
       end;
 
@@ -292,7 +416,7 @@ begin
         begin
           if Pair.Value.IsPK and KeysObj.Contains(Pair.Key) then
             SetPropertyValue(EntityObj, Pair.Value,
-              KeysObj.GetString(Pair.Key));
+              JsonMemberValue(KeysObj, Pair.Key));
         end;
       end;
 
@@ -307,7 +431,7 @@ begin
             if ValuesObj.Contains(Pair.Key) then
             begin
               SetPropertyValue(EntityObj, Pair.Value,
-                ValuesObj.GetString(Pair.Key));
+                JsonMemberValue(ValuesObj, Pair.Key));
               ADbContext.Entry(EntityObj).Member(Pair.Key).IsModified := True;
             end;
           end;

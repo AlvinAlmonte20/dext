@@ -5,6 +5,8 @@ interface
 uses
   System.SysUtils,
   System.Variants,
+  System.DateUtils,
+  Dext.Types.Nullable,
   Dext.Assertions,
   Dext.Testing.Attributes,
   Dext.Collections,
@@ -76,6 +78,88 @@ type
 
     [Test('Should not retry a failed item on the next SaveChanges with ContinueOnError')]
     procedure TestContinueOnErrorDoesNotRetryTheFailedItem;
+  end;
+
+  {$M+}
+  [Table('eds_typed')]
+  TEdsTyped = class
+  private
+    FId: Integer;
+    FQty: Int64;
+    FPrice: Double;
+    FAmount: Currency;
+    FActive: Boolean;
+    FDue: TDateTime;
+    FRating: Nullable<Integer>;
+  public
+    [PK, AutoInc, Column('id')]
+    property Id: Integer read FId write FId;
+    [Column('qty')]
+    property Qty: Int64 read FQty write FQty;
+    [Column('price')]
+    property Price: Double read FPrice write FPrice;
+    [Column('amount')]
+    property Amount: Currency read FAmount write FAmount;
+    [Column('active')]
+    property Active: Boolean read FActive write FActive;
+    [Column('due')]
+    property Due: TDateTime read FDue write FDue;
+    [Column('rating')]
+    property Rating: Nullable<Integer> read FRating write FRating;
+  end;
+  {$M-}
+
+  /// <summary>
+  ///   Non-string properties (#213): integer and auto-increment keys, Int64,
+  ///   Double, Currency, Boolean, TDateTime and Nullable values, whether the
+  ///   JSON carries them as strings or with their own JSON type. The row
+  ///   (1, ...) is there before every test.
+  /// </summary>
+  [TestFixture('EntityDataSet store - non-string properties')]
+  TEntityDataSetStoreTypesTests = class
+  private
+    FConn: TFDConnection;
+    FContext: TDbContext;
+    function Apply(const AJson: string): IList<TApplyItemResult>;
+    function Scalar(const ASql: string): Variant;
+  public
+    [Setup]
+    procedure Setup;
+    [TearDown]
+    procedure TearDown;
+
+    [Test('Should insert typed values sent as JSON strings')]
+    procedure TestInsertTypedValuesSentAsStrings;
+
+    [Test('Should insert typed values sent with their JSON types')]
+    procedure TestInsertTypedValuesSentAsJsonTypes;
+
+    [Test('Should return the auto-increment key of an inserted row')]
+    procedure TestInsertReturnsTheAutoIncKey;
+
+    [Test('Should modify a row by its integer key')]
+    procedure TestModifyByIntegerKey;
+
+    [Test('Should modify a row by its integer key sent as a string')]
+    procedure TestModifyByIntegerKeySentAsString;
+
+    [Test('Should delete a row by its integer key')]
+    procedure TestDeleteByIntegerKey;
+
+    [Test('Should modify a nullable column to a value')]
+    procedure TestModifyNullableColumn;
+
+    [Test('Should modify a column to its default value (0, false)')]
+    procedure TestModifyToDefaultValue;
+
+    [Test('Should store NULL when a nullable value is null')]
+    procedure TestNullClearsANullableColumn;
+
+    [Test('Should read the decimal point whatever the machine locale')]
+    procedure TestDecimalPointIgnoresTheLocale;
+
+    [Test('Should fail the item, naming the property, when a value cannot be converted')]
+    procedure TestUnconvertibleValueFailsTheItem;
   end;
 
 implementation
@@ -215,6 +299,212 @@ begin
 
   Should(FContext.ChangeTracker.HasChanges).BeFalse
     .Because('the failed entity must be detached, not left as Added');
+end;
+
+{ TEntityDataSetStoreTypesTests }
+
+const
+  // One millisecond, as a fraction of a day: dates go through the database.
+  OneMs = 1 / MSecsPerDay;
+
+procedure TEntityDataSetStoreTypesTests.Setup;
+begin
+  FConn := TFDConnection.Create(nil);
+  FConn.DriverName := 'SQLite';
+  FConn.Params.Add('Database=:memory:');
+  FConn.Connected := True;
+  FConn.ExecSQL('CREATE TABLE eds_typed (id INTEGER PRIMARY KEY AUTOINCREMENT, ' +
+    'qty BIGINT, price DOUBLE, amount DECIMAL(18,4), active BOOLEAN, ' +
+    'due DATETIME, rating INTEGER)');
+  FConn.ExecSQL('INSERT INTO eds_typed (id, qty, price, amount, active, due, ' +
+    'rating) VALUES (1, 1, 1.5, 1.25, 0, ''2026-01-01 08:00:00'', 3)');
+
+  FContext := TDbContext.Create(TFireDACConnection.Create(FConn, False),
+    TSQLiteDialect.Create);
+  FContext.Entities<TEdsTyped>;
+end;
+
+procedure TEntityDataSetStoreTypesTests.TearDown;
+begin
+  FreeAndNil(FContext);
+  FreeAndNil(FConn);
+end;
+
+function TEntityDataSetStoreTypesTests.Apply(
+  const AJson: string): IList<TApplyItemResult>;
+var
+  Store: IEntityDataSetStore;
+  Changes: IDextJsonArray;
+begin
+  Store := TDbContextEntityDataSetStore.Create;
+  Changes := (TDextJson.Provider.Parse(AJson) as IDextJsonObject).GetArray('changes');
+  Result := Store.ApplyChanges(TEdsTyped, Changes, FContext);
+end;
+
+function TEntityDataSetStoreTypesTests.Scalar(const ASql: string): Variant;
+begin
+  Result := FConn.ExecSQLScalar(ASql);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestInsertTypedValuesSentAsStrings;
+var
+  Results: IList<TApplyItemResult>;
+begin
+  Results := Apply('{"changes":[{"state":"inserted","values":{' +
+    '"Qty":"5000000000","Price":"3.5","Amount":"12.34","Active":"true",' +
+    '"Due":"2026-10-02T10:30:00","Rating":"4"}}]}');
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Int64(Scalar('SELECT qty FROM eds_typed WHERE id = 2'))).Be(5000000000);
+  Should(Double(Scalar('SELECT price FROM eds_typed WHERE id = 2'))).Be(3.5);
+  Should(Double(Scalar('SELECT amount FROM eds_typed WHERE id = 2')))
+    .BeApproximately(12.34, 0.00001);
+  Should(Boolean(Scalar('SELECT active FROM eds_typed WHERE id = 2'))).BeTrue;
+  Should(Double(Scalar('SELECT due FROM eds_typed WHERE id = 2')))
+    .BeApproximately(EncodeDateTime(2026, 10, 2, 10, 30, 0, 0), OneMs);
+  Should(Integer(Scalar('SELECT rating FROM eds_typed WHERE id = 2'))).Be(4);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestInsertTypedValuesSentAsJsonTypes;
+var
+  Results: IList<TApplyItemResult>;
+begin
+  Results := Apply('{"changes":[{"state":"inserted","values":{' +
+    '"Qty":5000000000,"Price":3.5,"Amount":12.34,"Active":true,' +
+    '"Due":"2026-10-02","Rating":4}}]}');
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Int64(Scalar('SELECT qty FROM eds_typed WHERE id = 2'))).Be(5000000000);
+  Should(Double(Scalar('SELECT price FROM eds_typed WHERE id = 2'))).Be(3.5);
+  Should(Double(Scalar('SELECT amount FROM eds_typed WHERE id = 2')))
+    .BeApproximately(12.34, 0.00001);
+  Should(Boolean(Scalar('SELECT active FROM eds_typed WHERE id = 2'))).BeTrue;
+  Should(Double(Scalar('SELECT due FROM eds_typed WHERE id = 2')))
+    .BeApproximately(EncodeDate(2026, 10, 2), OneMs);
+  Should(Integer(Scalar('SELECT rating FROM eds_typed WHERE id = 2'))).Be(4);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestInsertReturnsTheAutoIncKey;
+var
+  Results: IList<TApplyItemResult>;
+  NewKey: Variant;
+begin
+  Results := Apply('{"changes":[{"state":"inserted","values":{' +
+    '"Qty":"7","Price":"1","Amount":"1","Active":"false",' +
+    '"Due":"2026-10-02"}}]}');
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Results[0].Keys.TryGetValue('Id', NewKey)).BeTrue;
+  Should(Integer(NewKey)).Be(2);
+  Should(Int64(Scalar('SELECT qty FROM eds_typed WHERE id = 2'))).Be(7);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestModifyByIntegerKey;
+var
+  Results: IList<TApplyItemResult>;
+begin
+  Results := Apply('{"changes":[{"state":"modified","key":{"Id":1},' +
+    '"values":{"Price":7.25,"Due":"2026-12-31T23:59:00"}}]}');
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Double(Scalar('SELECT price FROM eds_typed WHERE id = 1'))).Be(7.25);
+  Should(Double(Scalar('SELECT due FROM eds_typed WHERE id = 1')))
+    .BeApproximately(EncodeDateTime(2026, 12, 31, 23, 59, 0, 0), OneMs);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestModifyByIntegerKeySentAsString;
+var
+  Results: IList<TApplyItemResult>;
+begin
+  Results := Apply('{"changes":[{"state":"modified","key":{"Id":"1"},' +
+    '"values":{"Qty":"99"}}]}');
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Int64(Scalar('SELECT qty FROM eds_typed WHERE id = 1'))).Be(99);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestDeleteByIntegerKey;
+var
+  Results: IList<TApplyItemResult>;
+begin
+  Results := Apply('{"changes":[{"state":"deleted","key":{"Id":1}}]}');
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Integer(Scalar('SELECT COUNT(*) FROM eds_typed'))).Be(0);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestModifyNullableColumn;
+var
+  Results: IList<TApplyItemResult>;
+begin
+  Results := Apply('{"changes":[{"state":"modified","key":{"Id":1},' +
+    '"values":{"Rating":5}}]}');
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Integer(Scalar('SELECT rating FROM eds_typed WHERE id = 1'))).Be(5);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestModifyToDefaultValue;
+var
+  Results: IList<TApplyItemResult>;
+begin
+  // The stored row has qty = 1 and price = 1.5. The store builds a fresh
+  // entity, whose values are the defaults, so a modification TO the default
+  // looks like no change unless the explicit IsModified is honoured.
+  Results := Apply('{"changes":[{"state":"modified","key":{"Id":1},' +
+    '"values":{"Qty":0,"Price":0}}]}');
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Int64(Scalar('SELECT qty FROM eds_typed WHERE id = 1'))).Be(0);
+  Should(Double(Scalar('SELECT price FROM eds_typed WHERE id = 1'))).Be(0);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestNullClearsANullableColumn;
+var
+  Results: IList<TApplyItemResult>;
+begin
+  Results := Apply('{"changes":[{"state":"modified","key":{"Id":1},' +
+    '"values":{"Rating":null}}]}');
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Scalar('SELECT rating FROM eds_typed WHERE id = 1')).BeNull;
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestDecimalPointIgnoresTheLocale;
+var
+  Results: IList<TApplyItemResult>;
+  OldDecimal, OldThousand: Char;
+begin
+  // A machine whose decimal separator is the comma: JSON still uses the dot.
+  OldDecimal := FormatSettings.DecimalSeparator;
+  OldThousand := FormatSettings.ThousandSeparator;
+  FormatSettings.DecimalSeparator := ',';
+  FormatSettings.ThousandSeparator := '.';
+  try
+    Results := Apply('{"changes":[{"state":"modified","key":{"Id":1},' +
+      '"values":{"Price":"3.5","Amount":"1234.5"}}]}');
+  finally
+    FormatSettings.DecimalSeparator := OldDecimal;
+    FormatSettings.ThousandSeparator := OldThousand;
+  end;
+
+  Should(Results[0].Success).BeTrue.Because(Results[0].ErrorMessage);
+  Should(Double(Scalar('SELECT price FROM eds_typed WHERE id = 1'))).Be(3.5);
+  Should(Double(Scalar('SELECT amount FROM eds_typed WHERE id = 1')))
+    .BeApproximately(1234.5, 0.00001);
+end;
+
+procedure TEntityDataSetStoreTypesTests.TestUnconvertibleValueFailsTheItem;
+var
+  Results: IList<TApplyItemResult>;
+begin
+  Results := Apply('{"changes":[{"state":"modified","key":{"Id":1},' +
+    '"values":{"Qty":"abc"}}]}');
+
+  Should(Results[0].Success).BeFalse
+    .Because('"abc" is not a number: it must not be written as 0');
+  Should(Results[0].ErrorMessage).Contain('Qty');
+  Should(Int64(Scalar('SELECT qty FROM eds_typed WHERE id = 1'))).Be(1);
 end;
 
 end.
