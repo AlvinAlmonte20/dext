@@ -44,7 +44,7 @@ interface
 
 uses
   System.SysUtils,
-  DextJsonDataObjects,
+  Dext.Core.Json.NextGen,
   System.RTTI,
   Dext.Collections,
   Dext.Collections.Dict,
@@ -274,13 +274,14 @@ begin
 
   for Def in FResources.Values do
   begin
-    ResObj := Arr.AddObject;
+    ResObj := TJsonObject.Create;
     ResObj.S['uri'] := Def.Uri;
     ResObj.S['name'] := Def.Name;
     if Def.Description <> '' then
       ResObj.S['description'] := Def.Description;
     if Def.MimeType <> '' then
       ResObj.S['mimeType'] := Def.MimeType;
+    Arr.Add(ResObj);
   end;
 
   Result := Arr;

@@ -65,6 +65,13 @@ type
     function QueryInterface(const IID: TGUID; out Obj): HResult; stdcall;
     function _AddRef: Integer; stdcall;
     function _Release: Integer; stdcall;
+    /// <summary>
+    /// Switches this node (and nested object/array children) to manual TObject
+    /// ownership so TObject.Free destroys the tree instead of returning nodes
+    /// to the per-thread pool (pool residency shows up as FastMM leaks on
+    /// Indy worker threads at process shutdown).
+    /// </summary>
+    procedure AdoptManualLifetime; virtual;
   public
     constructor Create(ARefCounted: Boolean = False);
     function GetSelf: TObject;
@@ -101,6 +108,7 @@ type
     property NodeRef: IDextJsonNode read GetNodeRef write SetNodeRef;
 
     procedure SetStrValue(const S: string);
+    procedure FreeNode; inline;
     function AsString: string;
     function AsInteger: Integer;
     function AsInt64: Int64;
@@ -193,6 +201,7 @@ type
     function GetTypes(const Name: string): TDextJsonNodeType; inline;
   protected
     function _Release: Integer; stdcall;
+    procedure AdoptManualLifetime; override;
   public
     constructor Create(ARefCounted: Boolean = False);
     destructor Destroy; override;
@@ -242,6 +251,8 @@ type
     property A[const Name: string]: TJsonArray read GetA write SetA;
     property Types[const Name: string]: TDextJsonNodeType read GetTypes;
     property Count: Integer read GetCount;
+    property Names[Index: Integer]: string read GetName;
+    property Nodes[const Name: string]: IDextJsonNode read GetNode;
   end;
 
   /// <summary>
@@ -268,6 +279,7 @@ type
     function GetTypes(Index: Integer): TDextJsonNodeType; inline;
   protected
     function _Release: Integer; stdcall;
+    procedure AdoptManualLifetime; override;
   public
     constructor Create(ARefCounted: Boolean = False);
     procedure Add(Value: TJsonObject); overload;
@@ -326,6 +338,7 @@ type
   public
     FKeepAlive: IInterface;
     constructor Create(const AValue: TNextGenJsonValue);
+    destructor Destroy; override;
     function GetNodeType: TDextJsonNodeType;
     function AsString: string;
     function AsInteger: Integer;
@@ -436,6 +449,11 @@ begin
   Result := -1;
 end;
 
+procedure TJsonBaseObject.AdoptManualLifetime;
+begin
+  FRefCounted := False;
+end;
+
 class function TJsonBaseObject.Parse(const AJson: string): TJsonBaseObject;
 var
   Bytes: TBytes;
@@ -443,6 +461,7 @@ var
   Node: IDextJsonNode;
   KeepAlive: IInterface;
   Getter: IDextJsonNodeGetter;
+  Obj: TJsonBaseObject;
 begin
   if AJson.IsEmpty then
     Exit(nil);
@@ -453,7 +472,13 @@ begin
   if Node = nil then
     Exit(nil);
   if Supports(Node, IDextJsonNodeGetter, Getter) then
-    Result := TJsonBaseObject(Getter.GetSelf)
+  begin
+    Obj := TJsonBaseObject(Getter.GetSelf);
+    { Own the whole tree with TObject.Free — nested rented nodes must not be
+      returned to the Indy worker thread pool (FastMM reports those as leaks). }
+    Obj.AdoptManualLifetime;
+    Result := Obj;
+  end
   else
     Result := nil;
 end;
@@ -491,13 +516,48 @@ procedure TNextGenJsonValue.SetNodeRef(const AValue: IDextJsonNode);
 begin
   if FNodeRef <> nil then
   begin
-    IDextJsonNode(FNodeRef)._Release;
-    FNodeRef := nil;
+    FreeNode;
   end;
   if AValue <> nil then
   begin
     FNodeRef := Pointer(AValue);
     AValue._AddRef;
+  end;
+end;
+
+procedure TNextGenJsonValue.FreeNode;
+var
+  P: Pointer;
+  Temp: IDextJsonNode;
+  Getter: IDextJsonNodeGetter;
+  Obj: TObject;
+begin
+  { FNodeRef owns exactly one reference (taken in SetNodeRef). Release it with a
+    direct vcall — do NOT assign to an interface first (that would AddRef and
+    mismatch ownership). When _Release returns -1 the target is a non-refcounted
+    TJsonObject/TJsonArray (Create default); the parent must Free it. Clear any
+    temporary interface with Pointer(...) := nil so _IntfClear does not run
+    after Free (that was the 0x80808088 AV). }
+  if FNodeRef = nil then
+    Exit;
+
+  P := FNodeRef;
+  FNodeRef := nil;
+
+  if IDextJsonNode(P)._Release <> -1 then
+    Exit;
+
+  Pointer(Temp) := P;
+  try
+    if Supports(Temp, IDextJsonNodeGetter, Getter) then
+    begin
+      Obj := Getter.GetSelf;
+      Getter := nil;
+      Pointer(Temp) := nil;
+      Obj.Free;
+    end;
+  finally
+    Pointer(Temp) := nil;
   end;
 end;
 
@@ -1351,6 +1411,34 @@ begin
     Result := -1;
 end;
 
+procedure TJsonObject.AdoptManualLifetime;
+var
+  I: Integer;
+  P: Pointer;
+  Temp: IDextJsonNode;
+  Getter: IDextJsonNodeGetter;
+  Child: TJsonBaseObject;
+begin
+  FRefCounted := False;
+  for I := 0 to FCount - 1 do
+  begin
+    P := FPairs[I].Value.FNodeRef;
+    if P = nil then
+      Continue;
+    Pointer(Temp) := P;
+    try
+      if Supports(Temp, IDextJsonNodeGetter, Getter) then
+      begin
+        Child := TJsonBaseObject(Getter.GetSelf);
+        Getter := nil;
+        Child.AdoptManualLifetime;
+      end;
+    finally
+      Pointer(Temp) := nil;
+    end;
+  end;
+end;
+
 constructor TJsonObject.Create(ARefCounted: Boolean);
 begin
   inherited Create(ARefCounted);
@@ -1369,8 +1457,7 @@ begin
   begin
     if FPairs[I].Value.FStrValue <> nil then
       Dispose(FPairs[I].Value.FStrValue);
-    if FPairs[I].Value.FNodeRef <> nil then
-      IDextJsonNode(FPairs[I].Value.FNodeRef)._Release;
+    FPairs[I].Value.FreeNode;
   end;
   inherited Destroy;
 end;
@@ -1551,8 +1638,7 @@ begin
   begin
     if FPairs[Idx].Value.FStrValue <> nil then
       Dispose(FPairs[Idx].Value.FStrValue);
-    if FPairs[Idx].Value.FNodeRef <> nil then
-      IDextJsonNode(FPairs[Idx].Value.FNodeRef)._Release;
+    FPairs[Idx].Value.FreeNode;
     FPairs[Idx].Value := AValue;
   end
   else
@@ -2129,6 +2215,34 @@ begin
     Result := -1;
 end;
 
+procedure TJsonArray.AdoptManualLifetime;
+var
+  I: Integer;
+  P: Pointer;
+  Temp: IDextJsonNode;
+  Getter: IDextJsonNodeGetter;
+  Child: TJsonBaseObject;
+begin
+  FRefCounted := False;
+  for I := 0 to FCount - 1 do
+  begin
+    P := FValues[I].FNodeRef;
+    if P = nil then
+      Continue;
+    Pointer(Temp) := P;
+    try
+      if Supports(Temp, IDextJsonNodeGetter, Getter) then
+      begin
+        Child := TJsonBaseObject(Getter.GetSelf);
+        Getter := nil;
+        Child.AdoptManualLifetime;
+      end;
+    finally
+      Pointer(Temp) := nil;
+    end;
+  end;
+end;
+
 constructor TJsonArray.Create(ARefCounted: Boolean);
 begin
   inherited Create(ARefCounted);
@@ -2144,8 +2258,7 @@ begin
   begin
     if FValues[I].FStrValue <> nil then
       Dispose(FValues[I].FStrValue);
-    if FValues[I].FNodeRef <> nil then
-      IDextJsonNode(FValues[I].FNodeRef)._Release;
+    FValues[I].FreeNode;
   end;
   inherited Destroy;
 end;
@@ -2450,7 +2563,32 @@ end;
 constructor TNextGenJsonPrimitive.Create(const AValue: TNextGenJsonValue);
 begin
   inherited Create;
-  FValue := AValue;
+  { Deep-copy primitives so the wrapper does not alias FStrValue/FValueSpan from
+    a parent TJsonObject (GetNode/GetId must remain valid independently, and must
+    not double-Dispose the parent's PString). }
+  FValue.Init(AValue.NodeType, TByteSpan.Create(nil, 0));
+  case AValue.NodeType of
+    TDextJsonNodeType.jntString,
+    TDextJsonNodeType.jntNumber,
+    TDextJsonNodeType.jntBoolean:
+      FValue.SetStrValue(AValue.AsString);
+    TDextJsonNodeType.jntNull:
+      ;
+  else
+    { Object/array must not go through Primitive; treat as null. }
+    FValue.Init(TDextJsonNodeType.jntNull, TByteSpan.Create(nil, 0));
+  end;
+end;
+
+destructor TNextGenJsonPrimitive.Destroy;
+begin
+  if FValue.FStrValue <> nil then
+  begin
+    Dispose(FValue.FStrValue);
+    FValue.FStrValue := nil;
+  end;
+  FValue.FreeNode;
+  inherited Destroy;
 end;
 
 function TNextGenJsonPrimitive.GetNodeType: TDextJsonNodeType;
@@ -2612,11 +2750,7 @@ begin
       Dispose(AnObj.FPairs[I].Value.FStrValue);
       AnObj.FPairs[I].Value.FStrValue := nil;
     end;
-    if AnObj.FPairs[I].Value.FNodeRef <> nil then
-    begin
-      IDextJsonNode(AnObj.FPairs[I].Value.FNodeRef)._Release;
-      AnObj.FPairs[I].Value.FNodeRef := nil;
-    end;
+    AnObj.FPairs[I].Value.FreeNode;
   end;
   AnObj.FCount := 0;
   AnObj.FKeepAlive := nil;
@@ -2654,11 +2788,7 @@ begin
       Dispose(AnArr.FValues[I].FStrValue);
       AnArr.FValues[I].FStrValue := nil;
     end;
-    if AnArr.FValues[I].FNodeRef <> nil then
-    begin
-      IDextJsonNode(AnArr.FValues[I].FNodeRef)._Release;
-      AnArr.FValues[I].FNodeRef := nil;
-    end;
+    AnArr.FValues[I].FreeNode;
   end;
   AnArr.FCount := 0;
   AnArr.FKeepAlive := nil;

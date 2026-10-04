@@ -9,7 +9,7 @@ uses
   FireDAC.Stan.Error, FireDAC.UI.Intf, FireDAC.Phys.Intf, FireDAC.Stan.Def,
   FireDAC.Stan.Pool, FireDAC.Stan.Async, FireDAC.Phys, FireDAC.Phys.SQLite,
   FireDAC.Phys.SQLiteDef, FireDAC.Stan.ExprFuncs, FireDAC.VCLUI.Wait,
-  FireDAC.Comp.Client, FireDAC.Comp.UI, DextJsonDataObjects,
+  FireDAC.Comp.Client, FireDAC.Comp.UI, Dext.Core.Json.NextGen,
   Dext.AI.MCP.Server, Dext.AI.MCP.Tools, Dext.AI.MCP.Types, Dext.AI.MCP.Attributes,
   Dext.AI.MCP.Protocol, FireDAC.Phys.SQLiteWrapper.Stat, FireDAC.ConsoleUI.Wait, FireDAC.Stan.Param, FireDAC.DatS,
   FireDAC.DApt.Intf, FireDAC.DApt, FireDAC.Comp.DataSet;
@@ -277,11 +277,12 @@ begin
     try
       while not Qry.Eof do
       begin
-        JO := JA.AddObject;
+        JO := TJsonObject.Create;
         JO.I['id'] := Qry.FieldByName('id').AsInteger;
         JO.S['nome'] := Qry.FieldByName('nome').AsString;
         JO.S['email'] := Qry.FieldByName('email').AsString;
         JO.B['sorteado'] := Qry.FieldByName('sorteado').AsBoolean;
+        JA.Add(JO);
         Qry.Next;
       end;
 
@@ -362,11 +363,11 @@ begin
       try
         while not Qry.Eof do
         begin
-          JO := JA.AddObject;
+          JO := TJsonObject.Create;
           for I := 0 to Qry.FieldCount - 1 do
           begin
             if Qry.Fields[I].IsNull then
-              JO.O[Qry.Fields[I].FieldName] := nil
+              JO.SetNull(Qry.Fields[I].FieldName)
             else
             begin
               case Qry.Fields[I].DataType of
@@ -381,6 +382,7 @@ begin
               end;
             end;
           end;
+          JA.Add(JO);
           Qry.Next;
         end;
         Result := TMCPToolResult.Text(JA.ToJSON);
