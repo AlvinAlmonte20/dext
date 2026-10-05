@@ -38,6 +38,8 @@ type
     procedure Test_HandlerInvoker_AutoValidation_ProblemJson;
     [Test]
     procedure Test_HandlerInvoker_BindingFailure_ProblemDetails;
+    [Test]
+    procedure Test_HandlerInvoker_RouteInteger_Binds;
   end;
 
 implementation
@@ -143,6 +145,36 @@ begin
 
     Should(Context.Response.StatusCode).Be(400);
     Should(Context.Response.ContentType).Contain('application/problem+json');
+  finally
+    Invoker.Free;
+  end;
+end;
+
+procedure TWebValidationTests.Test_HandlerInvoker_RouteInteger_Binds;
+var
+  Context: IHttpContext;
+  Invoker: THandlerInvoker;
+  Binder: IModelBinder;
+  RouteParams: IDictionary<string, string>;
+  Received: Integer;
+begin
+  // The counterpart of the binding failure above: a numeric route value
+  // still reaches the handler.
+  RouteParams := TCollections.CreateDictionary<string, string>;
+  RouteParams.Add('id', '42');
+  Context := TMockFactory.CreateHttpContextWithRoute('', RouteParams);
+  Binder := TModelBinder.Create;
+  Invoker := THandlerInvoker.Create(Context, Binder);
+  try
+    Received := -1;
+    Invoker.Invoke<Integer>(
+      procedure(Arg: Integer)
+      begin
+        Received := Arg;
+      end
+    );
+
+    Should(Received).Be(42);
   finally
     Invoker.Free;
   end;

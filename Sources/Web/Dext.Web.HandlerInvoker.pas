@@ -429,17 +429,20 @@ begin
       Arg1 := TDextBinderFactory<T>.Bind(Self).AsType<T>;
 
       if not Validate(TValue.From<T>(Arg1)) then Exit(False);
-
-      AHandler(Arg1);
-      Result := True;
     except
       on E: Exception do
       begin
         SafeWriteln('[Dext.Web] Binding/Validation Error: ' + E.ClassName + ': ' + E.Message);
         WriteBindingProblem(E.Message);
-        Result := False;
+        Exit(False);
       end;
     end;
+
+    // The handler runs outside the binding try..except: its exceptions are
+    // not binding failures, so they propagate with their own status to
+    // UseExceptionHandler (or to the server).
+    AHandler(Arg1);
+    Result := True;
   finally
     CleanupBoundObjects;
   end;
@@ -457,17 +460,20 @@ begin
 
       if not Validate(TValue.From<T1>(Arg1)) then Exit(False);
       if not Validate(TValue.From<T2>(Arg2)) then Exit(False);
-
-      AHandler(Arg1, Arg2);
-      Result := True;
     except
       on E: Exception do
       begin
         SafeWriteln('[Dext.Web] Binding/Validation Error: ' + E.ClassName + ': ' + E.Message);
         WriteBindingProblem(E.Message);
-        Result := False;
+        Exit(False);
       end;
     end;
+
+    // The handler runs outside the binding try..except: its exceptions are
+    // not binding failures, so they propagate with their own status to
+    // UseExceptionHandler (or to the server).
+    AHandler(Arg1, Arg2);
+    Result := True;
   finally
     CleanupBoundObjects;
   end;
@@ -488,17 +494,20 @@ begin
       if not Validate(TValue.From<T1>(Arg1)) then Exit(False);
       if not Validate(TValue.From<T2>(Arg2)) then Exit(False);
       if not Validate(TValue.From<T3>(Arg3)) then Exit(False);
-
-      AHandler(Arg1, Arg2, Arg3);
-      Result := True;
     except
       on E: Exception do
       begin
         SafeWriteln('[Dext.Web] Binding/Validation Error: ' + E.ClassName + ': ' + E.Message);
         WriteBindingProblem(E.Message);
-        Result := False;
+        Exit(False);
       end;
     end;
+
+    // The handler runs outside the binding try..except: its exceptions are
+    // not binding failures, so they propagate with their own status to
+    // UseExceptionHandler (or to the server).
+    AHandler(Arg1, Arg2, Arg3);
+    Result := True;
   finally
     CleanupBoundObjects;
   end;
@@ -532,18 +541,22 @@ begin
       begin
         if not Validate(TValue.From<T>(Arg1)) then Exit(False);
       end;
-      Res := AHandler(Arg1);
-      if TValue.From<TResult>(Res).TryAsType<IResult>(ResIntf) then
-        ResIntf.Execute(FContext);
-      Result := True;
     except
       on E: Exception do
       begin
         SafeWriteln('[Dext.Web] Binding/Validation Error: ' + E.ClassName + ': ' + E.Message);
         WriteBindingProblem(E.Message);
-        Result := False;
+        Exit(False);
       end;
     end;
+
+    // The handler runs outside the binding try..except: its exceptions are
+    // not binding failures, so they propagate with their own status to
+    // UseExceptionHandler (or to the server).
+    Res := AHandler(Arg1);
+    if TValue.From<TResult>(Res).TryAsType<IResult>(ResIntf) then
+      ResIntf.Execute(FContext);
+    Result := True;
   finally
     CleanupBoundObjects;
   end;
@@ -569,19 +582,22 @@ begin
       begin
         if not Validate(TValue.From<T2>(Arg2)) then Exit(False);
       end;
-
-      Res := AHandler(Arg1, Arg2);
-      if TValue.From<TResult>(Res).TryAsType<IResult>(ResIntf) then
-        ResIntf.Execute(FContext);
-      Result := True;
     except
       on E: Exception do
       begin
         SafeWriteln('[Dext.Web] Binding/Validation Error: ' + E.ClassName + ': ' + E.Message);
         WriteBindingProblem(E.Message);
-        Result := False;
+        Exit(False);
       end;
     end;
+
+    // The handler runs outside the binding try..except: its exceptions are
+    // not binding failures, so they propagate with their own status to
+    // UseExceptionHandler (or to the server).
+    Res := AHandler(Arg1, Arg2);
+    if TValue.From<TResult>(Res).TryAsType<IResult>(ResIntf) then
+      ResIntf.Execute(FContext);
+    Result := True;
   finally
     CleanupBoundObjects;
   end;
@@ -613,19 +629,22 @@ begin
       begin
         if not Validate(TValue.From<T3>(Arg3)) then Exit(False);
       end;
-
-      Res := AHandler(Arg1, Arg2, Arg3);
-      if TValue.From<TResult>(Res).TryAsType<IResult>(ResIntf) then
-        ResIntf.Execute(FContext);
-      Result := True;
     except
       on E: Exception do
       begin
         SafeWriteln('[Dext.Web] Binding/Validation Error: ' + E.ClassName + ': ' + E.Message);
         WriteBindingProblem(E.Message);
-        Result := False;
+        Exit(False);
       end;
     end;
+
+    // The handler runs outside the binding try..except: its exceptions are
+    // not binding failures, so they propagate with their own status to
+    // UseExceptionHandler (or to the server).
+    Res := AHandler(Arg1, Arg2, Arg3);
+    if TValue.From<TResult>(Res).TryAsType<IResult>(ResIntf) then
+      ResIntf.Execute(FContext);
+    Result := True;
   finally
     CleanupBoundObjects;
   end;
@@ -692,25 +711,20 @@ begin
       Exit(False);
   end;
 
-  try
-    ResultValue := AMethod.Invoke(AInstance, FArgsBuffer);
+  // No try..except here: an exception raised by the action is not a binding
+  // failure. It propagates to the controller dispatcher, which lets the
+  // OnActionExecuted filters see it and then re-raises it, so that
+  // UseExceptionHandler (or the server) answers with its status.
+  ResultValue := AMethod.Invoke(AInstance, FArgsBuffer);
 
-    if ResultValue.IsEmpty then
-    begin
-      // Controller already wrote the response via Ctx.Response
-    end
-    else if ResultValue.TryAsType<IResult>(ResIntf) then
-      ResIntf.Execute(FContext)
-    else
-      FContext.Response.Json(TDextJson.Serialize(ResultValue));
-
-  except
-    on E: Exception do
-    begin
-      FContext.Response.Status(500).Json(Format('{"error": "Method invocation failed: %s"}', [E.Message]));
-      Exit(False);
-    end;
-  end;
+  if ResultValue.IsEmpty then
+  begin
+    // Controller already wrote the response via Ctx.Response
+  end
+  else if ResultValue.TryAsType<IResult>(ResIntf) then
+    ResIntf.Execute(FContext)
+  else
+    FContext.Response.Json(TDextJson.Serialize(ResultValue));
 
   Result := True;
 end;
