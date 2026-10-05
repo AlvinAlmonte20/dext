@@ -724,12 +724,19 @@ begin
           if ExecutedContext.ExceptionHandled then
           begin
             SafeWriteLn('🛡️ Exception handled by filter');
+            // The filter may answer through a result instead of writing
+            // the response itself.
+            if Assigned(ExecutedContext.Result) then
+              ExecutedContext.Result.Execute(Context);
             Exit; // Don't re-raise
           end;
         end;
       end;
 
-      Context.Response.Status(500).Json(Format('{"error": "Execution failed: %s"}', [E.Message]));
+      // Not handled by a filter: re-raise, so that UseExceptionHandler (or
+      // the server) answers with the status of the exception
+      // (EHttpException) and without exposing internal messages.
+      raise;
     end;
   end;
 end;
