@@ -202,7 +202,6 @@ end;
 function TEvaluatorVisitor.Compare(const Left, Right: TValue; Op: TBinaryOperator): Boolean;
 var
   L, R: Variant;
-  S, P: string;
   I: Integer;
   Elem: TValue;
 begin
@@ -227,22 +226,14 @@ begin
     boGreaterThanOrEqual: Result := L >= R;
     boLessThan: Result := L < R;
     boLessThanOrEqual: Result := L <= R;
-    boLike: 
-      begin
-        // Simple LIKE implementation (case-insensitive)
-        // Supports % at start/end
-        S := VarToStr(L).ToLower;
-        P := VarToStr(R).ToLower;
-        if P.StartsWith('%') and P.EndsWith('%') then
-          Result := S.Contains(P.Substring(1, P.Length - 2))
-        else if P.StartsWith('%') then
-          Result := S.EndsWith(P.Substring(1))
-        else if P.EndsWith('%') then
-          Result := S.StartsWith(P.Substring(0, P.Length - 1))
-        else
-          Result := S = P;
-      end;
+    // Case-insensitive, as before. % and _ are wildcards anywhere in the
+    // pattern, as in SQL.
+    boLike: Result := LikeMatches(VarToStr(L), VarToStr(R), True);
     boNotLike: Result := not Compare(Left, Right, boLike);
+    // The value is matched literally: a % or _ in it is not a wildcard.
+    boStartsWith: Result := VarToStr(L).ToLower.StartsWith(VarToStr(R).ToLower);
+    boEndsWith: Result := VarToStr(L).ToLower.EndsWith(VarToStr(R).ToLower);
+    boContains: Result := VarToStr(L).ToLower.Contains(VarToStr(R).ToLower);
     boIn: 
       begin
         Result := False;

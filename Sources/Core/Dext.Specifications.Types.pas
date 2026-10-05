@@ -49,7 +49,10 @@ type
   /// </summary>
   TBinaryOperator = (boEqual, boNotEqual, boGreaterThan, boGreaterThanOrEqual, 
     boLessThan, boLessThanOrEqual, boLike, boNotLike, boIn, boNotIn,
-    boBitwiseAnd, boBitwiseOr, boBitwiseXor);
+    boBitwiseAnd, boBitwiseOr, boBitwiseXor,
+    // StartsWith / EndsWith / Contains: the value is matched literally (a %
+    // or _ in it is not a wildcard). SQL renders them as LIKE with ESCAPE.
+    boStartsWith, boEndsWith, boContains);
 
   /// <summary>
   ///   Represents an arithmetic operator (+, -, *, /).
@@ -267,6 +270,12 @@ type
   end;
 
   function Prop(const AName: string): TPropExpression;
+
+  /// <summary>
+  ///   Evaluates a SQL LIKE pattern in memory: % matches any sequence, _ any
+  ///   single character, everything else matches itself. No escape character.
+  /// </summary>
+  function LikeMatches(const AValue, APattern: string; AIgnoreCase: Boolean): Boolean;
 
 implementation
 
@@ -630,6 +639,54 @@ begin
   Result := TPropExpression.Create(AName);
 end;
 
+function LikeMatches(const AValue, APattern: string; AIgnoreCase: Boolean): Boolean;
+var
+  S, P: string;
+  SI, PI, StarP, StarS: Integer;
+begin
+  if AIgnoreCase then
+  begin
+    S := AValue.ToLower;
+    P := APattern.ToLower;
+  end
+  else
+  begin
+    S := AValue;
+    P := APattern;
+  end;
+
+  // Greedy match with backtracking to the last %.
+  SI := 1;
+  PI := 1;
+  StarP := 0;
+  StarS := 0;
+  while SI <= Length(S) do
+  begin
+    if (PI <= Length(P)) and (P[PI] <> '%') and ((P[PI] = '_') or (P[PI] = S[SI])) then
+    begin
+      Inc(SI);
+      Inc(PI);
+    end
+    else if (PI <= Length(P)) and (P[PI] = '%') then
+    begin
+      StarP := PI;
+      StarS := SI;
+      Inc(PI);
+    end
+    else if StarP > 0 then
+    begin
+      PI := StarP + 1;
+      Inc(StarS);
+      SI := StarS;
+    end
+    else
+      Exit(False);
+  end;
+  while (PI <= Length(P)) and (P[PI] = '%') do
+    Inc(PI);
+  Result := PI > Length(P);
+end;
+
 { TPropExpression }
 
 constructor TPropExpression.Create(const AName: string; const AJsonPath: string);
@@ -700,17 +757,17 @@ end;
 
 function TPropExpression.StartsWith(const Value: string): TFluentExpression;
 begin
-  Result := Like(Value + '%');
+  Result.FExpression := TBinaryExpression.Create(GetLeftExp, TLiteralExpression.Create(Value), boStartsWith);
 end;
 
 function TPropExpression.EndsWith(const Value: string): TFluentExpression;
 begin
-  Result := Like('%' + Value);
+  Result.FExpression := TBinaryExpression.Create(GetLeftExp, TLiteralExpression.Create(Value), boEndsWith);
 end;
 
 function TPropExpression.Contains(const Value: string): TFluentExpression;
 begin
-  Result := Like('%' + Value + '%');
+  Result.FExpression := TBinaryExpression.Create(GetLeftExp, TLiteralExpression.Create(Value), boContains);
 end;
 
 function TPropExpression.&In(const Values: TArray<string>): TFluentExpression;

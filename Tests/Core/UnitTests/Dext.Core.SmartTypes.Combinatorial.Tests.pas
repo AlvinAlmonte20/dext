@@ -355,7 +355,7 @@ begin
   Expr := StrProp.StartsWith('Cesar');
   Should(Expr.Expression).NotBeNil;
   Should(Expr.Expression is TBinaryExpression).BeTrue;
-  Should(TBinaryExpression(Expr.Expression).BinaryOperator).Be(boLike);
+  Should(TBinaryExpression(Expr.Expression).BinaryOperator).Be(boStartsWith);
 
   Expr := IntProp.&In(Arr);
   Should(Expr.Expression).NotBeNil;

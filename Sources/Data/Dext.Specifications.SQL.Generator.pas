@@ -117,6 +117,9 @@ type
     class function GetCascadeSQL(AAction: TCascadeAction): string;
     class function GetColumnNameForProperty(ATyp: TRttiType; const APropName: string; ANamingStrategy: INamingStrategy = nil): string;
     class function GetRelatedTableAndPK(AClass: TClass; out ATable, ASchema, APK: string; ANamingStrategy: INamingStrategy = nil): Boolean;
+    /// <summary>The dialect of ADialect, recognized from its quoting when
+    ///   GetDialect does not say.</summary>
+    class function ResolveDialect(const ADialect: ISQLDialect): TDatabaseDialect; static;
   end;
 
   /// <summary>
@@ -204,6 +207,7 @@ type
   private
     FParams: IDictionary<string, TValue>;
     FParamCount: Integer;
+    FDialect: TDatabaseDialect;
 
     function GetNextParamName: string;
     procedure Resolve(const Ex: IExpression);
@@ -213,7 +217,10 @@ type
     procedure ProcessUnary(const C: TUnaryExpression);
     procedure ProcessLiteral(const C: TLiteralExpression);
   public
-    constructor Create(AParams: IDictionary<string, TValue>);
+    /// <param name="ADialect">The dialect the cached statement was generated
+    ///   for: StartsWith / EndsWith / Contains escape their value per dialect.</param>
+    constructor Create(AParams: IDictionary<string, TValue>;
+      ADialect: TDatabaseDialect = ddUnknown);
     procedure Collect(const AExpression: IExpression);
   end;
 
@@ -223,10 +230,70 @@ uses
   Dext.Entity.Context,
   Dext.Entity.Tenancy;
 
+// The escape character for StartsWith / EndsWith / Contains. Not a backslash:
+// in MySQL string literals the backslash is itself an escape character.
+const
+  LikeEscapeChar = '!';
+
+/// <summary>The dialect of AD, recognized from its quoting when GetDialect
+///   does not say. The where generator and the parameter collector use the
+///   same function, so that a cached statement gets the same parameters.</summary>
+function ResolveDialect(const AD: ISQLDialect): TDatabaseDialect;
+var
+  Quoted: string;
+begin
+  Result := ddUnknown;
+  if AD = nil then
+    Exit;
+  Result := AD.GetDialect;
+  if Result = ddUnknown then
+  begin
+    Quoted := AD.QuoteIdentifier('t');
+    if Quoted.StartsWith('[') then Result := ddSQLServer
+    else if Quoted.StartsWith('`') then Result := ddMySQL
+    else if Quoted.StartsWith('"') then
+    begin
+       if SameText(AD.BooleanToSQL(True), 'TRUE') then Result := ddPostgreSQL
+       else Result := ddSQLite;
+    end;
+  end;
+end;
+
+/// <summary>The LIKE pattern for StartsWith / EndsWith / Contains: the value
+///   with every character LIKE treats as special escaped by LikeEscapeChar,
+///   plus the wildcards of the operator. SQL Server also reads [ as the start
+///   of a character class.</summary>
+function LiteralLikePattern(const AValue: string; AOperator: TBinaryOperator;
+  ADialect: TDatabaseDialect): string;
+var
+  SB: TStringBuilder;
+  C: Char;
+begin
+  SB := TStringBuilder.Create(Length(AValue) + 8);
+  try
+    if AOperator in [boEndsWith, boContains] then
+      SB.Append('%');
+    for C in AValue do
+    begin
+      if (C = LikeEscapeChar) or (C = '%') or (C = '_') or
+        ((C = '[') and (ADialect = ddSQLServer)) then
+        SB.Append(LikeEscapeChar);
+      SB.Append(C);
+    end;
+    if AOperator in [boStartsWith, boContains] then
+      SB.Append('%');
+    Result := SB.ToString;
+  finally
+    SB.Free;
+  end;
+end;
+
 { TSQLParamCollector }
 
-constructor TSQLParamCollector.Create(AParams: IDictionary<string, TValue>);
+constructor TSQLParamCollector.Create(AParams: IDictionary<string, TValue>;
+  ADialect: TDatabaseDialect);
 begin
+  FDialect := ADialect;
   FParams := AParams;
   FParamCount := 0; 
 end;
@@ -298,7 +365,12 @@ begin
   
   if C.Right is TLiteralExpression then
   begin
-    FParams.Add(GetNextParamName, TLiteralExpression(C.Right).Value);
+    // Same parameter value as TSQLWhereGenerator.ProcessBinary.
+    if C.BinaryOperator in [boStartsWith, boEndsWith, boContains] then
+      FParams.Add(GetNextParamName, TValue.From<string>(LiteralLikePattern(
+        TLiteralExpression(C.Right).Value.ToString, C.BinaryOperator, FDialect)))
+    else
+      FParams.Add(GetNextParamName, TLiteralExpression(C.Right).Value);
   end
   else
     Resolve(C.Right);
@@ -331,6 +403,11 @@ begin
 end;
 
 { TSQLGeneratorHelper }
+
+class function TSQLGeneratorHelper.ResolveDialect(const ADialect: ISQLDialect): TDatabaseDialect;
+begin
+  Result := Dext.Specifications.SQL.Generator.ResolveDialect(ADialect);
+end;
 
 class function TSQLGeneratorHelper.GetCascadeSQL(AAction: TCascadeAction): string;
 begin
@@ -566,7 +643,6 @@ var
   SQLCast: string;
   Converter: ITypeConverter;
   DialectEnum: TDatabaseDialect;
-  Quoted: string;
   PVal: TValue;
   URType: TRttiType;
   UFValue: TRttiField;
@@ -631,24 +707,27 @@ begin
   begin
     Lit := TLiteralExpression(C.Right);
     ParamName := GetNextParamName;
+
+    // StartsWith / EndsWith / Contains: the value is matched literally, so
+    // its % and _ are escaped and the LIKE says which escape character it
+    // uses. The parameter is always a plain string (no uuid/text cast).
+    if C.BinaryOperator in [boStartsWith, boEndsWith, boContains] then
+    begin
+      FParams.Add(ParamName, TValue.From<string>(LiteralLikePattern(
+        Lit.Value.ToString, C.BinaryOperator, ResolveDialect(FDialect))));
+      FSQL.Append(':').Append(ParamName)
+          .Append(' ESCAPE ''').Append(LikeEscapeChar).Append('''')
+          .Append(')');
+      Exit;
+    end;
+
     FParams.Add(ParamName, Lit.Value);
     
     // Type converter support for SQL casting in WHERE clause
     Converter := TTypeConverterRegistry.Instance.GetConverter(Lit.Value.TypeInfo);
     
     // Determine Dialect Enum
-    DialectEnum := FDialect.GetDialect;
-    if DialectEnum = ddUnknown then
-    begin
-      Quoted := FDialect.QuoteIdentifier('t');
-      if Quoted.StartsWith('[') then DialectEnum := ddSQLServer
-      else if Quoted.StartsWith('`') then DialectEnum := ddMySQL
-      else if Quoted.StartsWith('"') then
-      begin
-         if SameText(FDialect.BooleanToSQL(True), 'TRUE') then DialectEnum := ddPostgreSQL
-         else DialectEnum := ddSQLite;
-      end;
-    end;
+    DialectEnum := ResolveDialect(FDialect);
     
     // When comparing JSON property extraction result (returns TEXT) with non-string values,
     // we need to cast the parameter to TEXT for PostgreSQL
@@ -769,6 +848,7 @@ begin
     boNotLike: Result := 'NOT LIKE';
     boIn: Result := 'IN';
     boNotIn: Result := 'NOT IN';
+    boStartsWith, boEndsWith, boContains: Result := 'LIKE';
     boBitwiseAnd: Result := '&';
     boBitwiseOr: Result := '|';
     boBitwiseXor: Result := '#';
@@ -2126,7 +2206,7 @@ begin
     if TSQLCache.Instance.TryGetSQL(Sig, CachedSQL) then
     begin
       // Re-hydrate parameters using Collector (fast traversal)
-      Collector := TSQLParamCollector.Create(FParams);
+      Collector := TSQLParamCollector.Create(FParams, TSQLGeneratorHelper.ResolveDialect(FDialect));
       try
         Collector.Collect(ASpec.GetExpression);
       finally
