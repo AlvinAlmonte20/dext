@@ -1134,6 +1134,318 @@ begin
     end;
 end;
 
+// Strict conversions for BindRecordHybrid.
+//
+// TReflection.CastFromString never fails: a value that does not convert
+// becomes the default (0, an empty GUID, the first member of an enum), and
+// the handler then runs with it. The functions below raise EBindingException,
+// naming the field, so the client gets a 400 instead.
+
+function FieldError(const AField, AValue, AReason: string): EBindingException;
+var
+  Shown: string;
+begin
+  // The value goes back to the client in the problem details: keep it short.
+  Shown := AValue;
+  if Length(Shown) > 64 then
+    Shown := Copy(Shown, 1, 64) + '...';
+  Result := EBindingException.CreateFmt('Field "%s": cannot convert "%s": %s',
+    [AField, Shown, AReason]);
+end;
+
+function StrictInteger(const AText: string; AType: PTypeInfo; const AField: string): TValue;
+var
+  S: string;
+  V: Int64;
+  U: UInt64;
+  Data: PTypeData;
+begin
+  S := AText.Trim;
+  Data := GetTypeData(AType);
+  if (AType.Kind = tkInt64) and (Data.MinInt64Value > Data.MaxInt64Value) then
+  begin
+    // UInt64: MinInt64Value = 0 and MaxInt64Value = -1
+    if not TryStrToUInt64(S, U) then
+      raise FieldError(AField, AText, 'not an unsigned integer');
+    TValue.Make(@U, AType, Result);
+    Exit;
+  end;
+
+  if not TryStrToInt64(S, V) then
+    raise FieldError(AField, AText, 'not an integer');
+
+  if AType.Kind = tkInteger then
+  begin
+    if Data.OrdType = otULong then
+    begin
+      if (V < 0) or (V > High(Cardinal)) then
+        raise FieldError(AField, AText, 'out of range for ' + GetTypeName(AType));
+    end
+    else if (V < Data.MinValue) or (V > Data.MaxValue) then
+      raise FieldError(AField, AText, 'out of range for ' + GetTypeName(AType));
+  end
+  else if (V < Data.MinInt64Value) or (V > Data.MaxInt64Value) then
+    raise FieldError(AField, AText, 'out of range for ' + GetTypeName(AType));
+
+  Result := TValue.FromOrdinal(AType, V);
+end;
+
+// The ISO forms CastFromString reads ('yyyy-mm-dd', optionally followed by
+// 'T' or a space and 'hh:nn[:ss]', the rest ignored), checked instead of
+// defaulted; anything else goes to TryParseCommonDate.
+function TryStrictDateTime(const AText: string; out ADate: TDateTime): Boolean;
+var
+  S: string;
+  Y, M, D, H, N, Sc: Integer;
+  T: TDateTime;
+begin
+  S := AText.Trim;
+  if (Length(S) >= 10) and (S[5] = '-') and (S[8] = '-') then
+  begin
+    Result := False;
+    if not (TryStrToInt(Copy(S, 1, 4), Y) and TryStrToInt(Copy(S, 6, 2), M) and
+      TryStrToInt(Copy(S, 9, 2), D) and TryEncodeDate(Y, M, D, ADate)) then
+      Exit;
+    if Length(S) = 10 then
+      Exit(True);
+    if not CharInSet(S[11], ['T', 't', ' ']) then
+      Exit;
+    Sc := 0;
+    if not ((Length(S) >= 16) and TryStrToInt(Copy(S, 12, 2), H) and (S[14] = ':') and
+      TryStrToInt(Copy(S, 15, 2), N)) then
+      Exit;
+    if (Length(S) >= 19) and (S[17] = ':') and not TryStrToInt(Copy(S, 18, 2), Sc) then
+      Exit;
+    if not TryEncodeTime(H, N, Sc, 0, T) then
+      Exit;
+    ADate := ADate + T;
+    Exit(True);
+  end;
+  Result := TryParseCommonDate(S, ADate);
+end;
+
+function StrictFloat(const AText: string; AType: PTypeInfo; const AField: string): TValue;
+var
+  S: string;
+  DT: TDateTime;
+  Sg: Single;
+  Db: Double;
+  Ex: Extended;
+  Cu: Currency;
+  Co: Comp;
+  I64: Int64;
+begin
+  S := AText.Trim;
+  if (AType = TypeInfo(TDateTime)) or (AType = TypeInfo(TDate)) or (AType = TypeInfo(TTime)) then
+  begin
+    if not TryStrictDateTime(S, DT) then
+      raise FieldError(AField, AText, 'not a date/time');
+    TValue.Make(@DT, AType, Result);
+    Exit;
+  end;
+
+  case GetTypeData(AType).FloatType of
+    ftSingle:
+      begin
+        if not TryStrToFloat(S, Sg, TFormatSettings.Invariant) then
+          raise FieldError(AField, AText, 'not a number');
+        TValue.Make(@Sg, AType, Result);
+      end;
+    ftExtended:
+      begin
+        if not TryStrToFloat(S, Ex, TFormatSettings.Invariant) then
+          raise FieldError(AField, AText, 'not a number');
+        TValue.Make(@Ex, AType, Result);
+      end;
+    ftCurr:
+      begin
+        if not TryStrToCurr(S, Cu, TFormatSettings.Invariant) then
+          raise FieldError(AField, AText, 'not a number');
+        TValue.Make(@Cu, AType, Result);
+      end;
+    ftComp:
+      begin
+        if not TryStrToInt64(S, I64) then
+          raise FieldError(AField, AText, 'not an integer');
+        Co := I64;
+        TValue.Make(@Co, AType, Result);
+      end;
+  else
+    if not TryStrToFloat(S, Db, TFormatSettings.Invariant) then
+      raise FieldError(AField, AText, 'not a number');
+    TValue.Make(@Db, AType, Result);
+  end;
+end;
+
+function StrictEnum(const AText: string; AType: PTypeInfo; const AField: string): TValue;
+var
+  S: string;
+  V: Integer;
+  Data: PTypeData;
+begin
+  S := AText.Trim;
+  if AType = TypeInfo(Boolean) then
+  begin
+    // The words CastFromString reads as True, and their opposites.
+    if SameText(S, 'true') or (S = '1') or SameText(S, 'on') or SameText(S, 'yes') then
+      Exit(TValue.From<Boolean>(True));
+    if SameText(S, 'false') or (S = '0') or SameText(S, 'off') or SameText(S, 'no') then
+      Exit(TValue.From<Boolean>(False));
+    raise FieldError(AField, AText, 'not a boolean');
+  end;
+
+  // By name (case-insensitive) or by ordinal. CastFromString read only the
+  // ordinal, so a name became the first member.
+  Data := GetTypeData(AType);
+  V := GetEnumValue(AType, S);
+  if (V < 0) and not TryStrToInt(S, V) then
+    raise FieldError(AField, AText, 'not a value of ' + GetTypeName(AType));
+  if (V < Data.MinValue) or (V > Data.MaxValue) then
+    raise FieldError(AField, AText, 'not a value of ' + GetTypeName(AType));
+  Result := TValue.FromOrdinal(AType, V);
+end;
+
+/// <summary>Converts the text of a route, query or header value, or of a JSON
+///   string, to the field type.</summary>
+/// <param name="ADecode">True for route, query and header values, which
+///   CastFromString URL-decodes; False for JSON strings, which are already
+///   plain text.</param>
+function StrictText(const AText: string; AType: PTypeInfo; const AField: string;
+  ADecode: Boolean): TValue;
+var
+  S: string;
+  GuidStr: string;
+  G: TGUID;
+  U: TUUID;
+begin
+  if AText = '' then
+    Exit(TReflection.CastFromString('', AType));
+
+  if ADecode then
+    S := TNetEncoding.URL.Decode(AText)
+  else
+    S := AText;
+
+  case AType.Kind of
+    tkInteger, tkInt64:
+      Result := StrictInteger(S, AType, AField);
+    tkFloat:
+      Result := StrictFloat(S, AType, AField);
+    tkEnumeration:
+      Result := StrictEnum(S, AType, AField);
+    tkString, tkLString, tkWString, tkUString:
+      Result := TValue.From<string>(S);
+    tkRecord:
+      begin
+        if AType = TypeInfo(TGUID) then
+        begin
+          GuidStr := S.Trim;
+          if not GuidStr.StartsWith('{') then
+            GuidStr := '{' + GuidStr + '}';
+          try
+            G := StringToGUID(GuidStr);
+          except
+            raise FieldError(AField, AText, 'not a GUID');
+          end;
+          TValue.Make(@G, AType, Result);
+        end
+        else if AType = TypeInfo(TUUID) then
+        begin
+          try
+            U := TUUID.FromString(S);
+          except
+            raise FieldError(AField, AText, 'not a UUID');
+          end;
+          TValue.Make(@U, AType, Result);
+        end
+        else
+          Result := TReflection.CastFromString(AText, AType);
+      end;
+  else
+    Result := TReflection.CastFromString(AText, AType);
+  end;
+end;
+
+/// <summary>True for the field types the strict conversions handle. The
+///   others (nested records, arrays, Nullable, ...) keep the previous
+///   behaviour of this binder.</summary>
+function IsStrictKind(AType: PTypeInfo): Boolean;
+begin
+  case AType.Kind of
+    tkInteger, tkInt64, tkFloat, tkEnumeration,
+    tkString, tkLString, tkWString, tkUString:
+      Result := True;
+    tkRecord:
+      Result := (AType = TypeInfo(TGUID)) or (AType = TypeInfo(TUUID));
+  else
+    Result := False;
+  end;
+end;
+
+/// <summary>Converts a JSON body value to the field type: a number for a
+///   number, a string for a string or a date, true/false for a Boolean. A
+///   number written as a string ("7") is accepted; a value that does not
+///   convert raises.</summary>
+function StrictJson(const ANode: IDextJsonNode; AType: PTypeInfo; const AField: string): TValue;
+var
+  IsDate: Boolean;
+begin
+  if (ANode = nil) or (ANode.NodeType = jntNull) then
+  begin
+    TValue.Make(nil, AType, Result);
+    Exit;
+  end;
+
+  case AType.Kind of
+    tkInteger, tkInt64:
+      case ANode.NodeType of
+        jntNumber: Result := StrictInteger(ANode.ToJson, AType, AField);
+        jntString: Result := StrictInteger(ANode.AsString, AType, AField);
+      else
+        raise FieldError(AField, ANode.ToJson, 'expected an integer');
+      end;
+    tkFloat:
+      begin
+        IsDate := (AType = TypeInfo(TDateTime)) or (AType = TypeInfo(TDate)) or
+          (AType = TypeInfo(TTime));
+        if ANode.NodeType = jntString then
+          Result := StrictFloat(ANode.AsString, AType, AField)
+        else if (ANode.NodeType = jntNumber) and not IsDate then
+          Result := StrictFloat(ANode.ToJson, AType, AField)
+        else if IsDate then
+          raise FieldError(AField, ANode.ToJson, 'expected a date/time string')
+        else
+          raise FieldError(AField, ANode.ToJson, 'expected a number');
+      end;
+    tkEnumeration:
+      case ANode.NodeType of
+        jntBoolean:
+          if AType = TypeInfo(Boolean) then
+            Result := TValue.From<Boolean>(ANode.AsBoolean)
+          else
+            raise FieldError(AField, ANode.ToJson, 'not a value of ' + GetTypeName(AType));
+        jntString: Result := StrictEnum(ANode.AsString, AType, AField);
+        jntNumber: Result := StrictEnum(ANode.ToJson, AType, AField);
+      else
+        raise FieldError(AField, ANode.ToJson, 'expected a value of ' + GetTypeName(AType));
+      end;
+    tkString, tkLString, tkWString, tkUString:
+      case ANode.NodeType of
+        // As written: no URL decoding of JSON strings.
+        jntString: Result := TValue.From<string>(ANode.AsString);
+        jntNumber, jntBoolean: Result := TValue.From<string>(ANode.ToJson);
+      else
+        raise FieldError(AField, ANode.ToJson, 'expected a string');
+      end;
+  else
+    // TGUID / TUUID
+    if ANode.NodeType = jntString then
+      Result := StrictText(ANode.AsString, AType, AField, False)
+    else
+      raise FieldError(AField, ANode.ToJson, 'expected a string');
+  end;
+end;
+
 function TModelBinder.BindRecordHybrid(AType: PTypeInfo; Context: IHttpContext): TValue;
 var
   ContextRtti: TRttiContext;
@@ -1158,14 +1470,10 @@ var
   FoundInBody, FieldFound: Boolean;
   JsonFieldName: string;
   HeaderVal: string;
-  IntVal: Integer;
-  Int64Val: Int64;
-  CurrVal: Currency;
-  DateStr: string;
-  FloatVal: Double;
-  BoolVal: Boolean;
-  EnumStr: string;
   StrVal: string;
+  HasBodyFields: Boolean;
+  BodyMissing: Boolean;
+  ParseError: string;
 begin
   if AType.Kind <> tkRecord then
     raise EBindingException.Create('BindRecordHybrid only supports records');
@@ -1189,7 +1497,18 @@ begin
       LContentType := Context.Request.GetHeader('Content-Type');
       LIsJson := ContainsAsciiText(LContentType, 'application/json');
 
+      // Does any field expect the body? Fields without a binding attribute
+      // do (bsBody), with route and query as fallbacks.
+      HasBodyFields := False;
+      for Field in RttiType.GetFields do
+        if SourceProvider.GetBindingSource(Field) = bsBody then
+        begin
+          HasBodyFields := True;
+          Break;
+        end;
+
       Stream := Context.Request.Body;
+      BodyMissing := LIsPostLike and ((Stream = nil) or (Stream.Size = 0));
       if (Stream <> nil) and (Stream.Size > 0) and (LIsPostLike or LIsJson) then
       begin
         BodyLen := Integer(Stream.Size);
@@ -1205,15 +1524,28 @@ begin
         
         BodyJsonStr := TEncoding.UTF8.GetString(BodyBytes, 0, BodyLen);
 
-        if BodyJsonStr <> '' then
+        if Trim(BodyJsonStr) = '' then
+          BodyMissing := LIsPostLike
+        else
         begin
+          // A body that does not parse, or is not a JSON object, is a binding
+          // failure when a field expects it: before, every field silently
+          // kept its default and the handler ran.
+          ParseError := '';
+          JsonNode := nil;
           try
             JsonNode := TDextJson.Provider.Parse(BodyJsonStr);
-            if (JsonNode <> nil) and (JsonNode.GetNodeType = jntObject) then
-              BodyJsonObj := JsonNode as IDextJsonObject;
           except
             on E: Exception do
-              BodyJsonObj := nil;
+              ParseError := E.Message;
+          end;
+          if (JsonNode <> nil) and (JsonNode.GetNodeType = jntObject) then
+            BodyJsonObj := JsonNode as IDextJsonObject
+          else if HasBodyFields then
+          begin
+            if ParseError <> '' then
+              raise EBindingException.Create('Error parsing JSON body: ' + ParseError);
+            raise EBindingException.Create('The JSON body must be an object');
           end;
         end;
       end;
@@ -1232,7 +1564,7 @@ begin
                 // Headers are case-insensitive (GetHeader already handles this)
                 HeaderVal := Context.Request.GetHeader(FieldName);
                 if HeaderVal <> '' then
-                  FieldValue := TReflection.CastFromString(HeaderVal, Field.FieldType.Handle)
+                  FieldValue := StrictText(HeaderVal, Field.FieldType.Handle, FieldName, True)
                 else
                   FieldValue := TReflection.GetDefaultValue(Field, Field.FieldType.Handle);
               end;
@@ -1240,7 +1572,7 @@ begin
             bsQuery:
               begin
                 if QueryParams.TryGetValue(FieldName, QueryVal) then
-                   FieldValue := TReflection.CastFromString(QueryVal, Field.FieldType.Handle)
+                   FieldValue := StrictText(QueryVal, Field.FieldType.Handle, FieldName, True)
                 else
                    FieldValue := TReflection.GetDefaultValue(Field, Field.FieldType.Handle);
               end;
@@ -1248,15 +1580,21 @@ begin
             bsRoute:
               begin
                 if RouteParams.TryGetValue(FieldName, RouteVal) then
-                  FieldValue := TReflection.CastFromString(RouteVal, Field.FieldType.Handle)
+                  FieldValue := StrictText(RouteVal, Field.FieldType.Handle, FieldName, True)
                 else
                   FieldValue := TReflection.GetDefaultValue(Field, Field.FieldType.Handle);
               end;
 
             bsServices:
               begin
-                // For services, delegate to BindServices for the specific field
-                FieldValue := BindServices(Field.FieldType.Handle, Context);
+                // For services, delegate to BindServices for the specific field.
+                // A service that cannot be resolved leaves the field empty, as
+                // before: that is not a client error.
+                try
+                  FieldValue := BindServices(Field.FieldType.Handle, Context);
+                except
+                  FieldValue := TValue.Empty;
+                end;
               end;
 
             bsBody:
@@ -1290,55 +1628,19 @@ begin
                   if FieldFound then
                   begin
                     FoundInBody := True;
-                    // For complex types, we need to check the field type
-                    case Field.FieldType.TypeKind of
-                      tkInteger:
-                        begin
-                          IntVal := BodyJsonObj.GetInteger(JsonFieldName);
-                          FieldValue := TValue.From<Integer>(IntVal);
-                        end;
-                      tkInt64:
-                        begin
-                          Int64Val := BodyJsonObj.GetInt64(JsonFieldName);
-                          FieldValue := TValue.From<Int64>(Int64Val);
-                        end;
-                      tkFloat:
-                        begin
-                          if (Field.FieldType.Handle = TypeInfo(Currency)) then
-                          begin
-                            CurrVal := Currency(BodyJsonObj.GetDouble(JsonFieldName));
-                            FieldValue := TValue.From<Currency>(CurrVal);
-                          end
-                          else if (Field.FieldType.Handle = TypeInfo(TDateTime)) or 
-                                  (Field.FieldType.Handle = TypeInfo(TDate)) or 
-                                  (Field.FieldType.Handle = TypeInfo(TTime)) then
-                          begin                            
-                            DateStr := BodyJsonObj.GetString(JsonFieldName);
-                            FieldValue := TReflection.CastFromString(DateStr, Field.FieldType.Handle);
-                          end
-                          else
-                          begin
-                            FloatVal := BodyJsonObj.GetDouble(JsonFieldName);
-                            FieldValue := TValue.From<Double>(FloatVal);
-                          end;
-                        end;
-                      tkEnumeration:
-                        begin
-                          if Field.FieldType.Handle = TypeInfo(Boolean) then
-                          begin
-                            BoolVal := BodyJsonObj.GetBoolean(JsonFieldName);
-                            FieldValue := TValue.From<Boolean>(BoolVal);
-                          end
-                          else
-                          begin
-                            EnumStr := BodyJsonObj.GetString(JsonFieldName);
-                            FieldValue := TReflection.CastFromString(EnumStr, Field.FieldType.Handle);
-                          end;
-                        end;
+                    if IsStrictKind(Field.FieldType.Handle) then
+                      FieldValue := StrictJson(BodyJsonObj.GetNode(JsonFieldName),
+                        Field.FieldType.Handle, FieldName)
                     else
-                      // String and other types
-                      StrVal := BodyJsonObj.GetString(JsonFieldName);
-                      FieldValue := TReflection.CastFromString(StrVal, Field.FieldType.Handle);
+                    begin
+                      // Types this binder does not convert (nested records,
+                      // arrays, Nullable, ...): unchanged.
+                      try
+                        StrVal := BodyJsonObj.GetString(JsonFieldName);
+                        FieldValue := TReflection.CastFromString(StrVal, Field.FieldType.Handle);
+                      except
+                        FieldValue := TValue.Empty;
+                      end;
                     end;
                   end;
                 end;
@@ -1348,7 +1650,7 @@ begin
                 begin
                   if RouteParams.TryGetValue(FieldName, RouteVal) then
                   begin
-                    FieldValue := TReflection.CastFromString(RouteVal, Field.FieldType.Handle);
+                    FieldValue := StrictText(RouteVal, Field.FieldType.Handle, FieldName, True);
                     FoundInBody := True; // Mark as found
                   end;
                 end;
@@ -1358,8 +1660,12 @@ begin
                 begin
                   if QueryParams.TryGetValue(FieldName, QueryVal) then
                   begin
-                    FieldValue := TReflection.CastFromString(QueryVal, Field.FieldType.Handle);
+                    FieldValue := StrictText(QueryVal, Field.FieldType.Handle, FieldName, True);
                   end
+                  else if BodyMissing then
+                    // The field expects the body, and there is none: route
+                    // and query did not provide it either.
+                    raise EBindingException.Create('Request body is empty')
                   else
                     FieldValue := TReflection.GetDefaultValue(Field, Field.FieldType.Handle);
                 end;
@@ -1377,11 +1683,12 @@ begin
             Field.SetValue(Result.GetReferenceToRawData, FieldValue);
 
         except
+          // A field that cannot be bound is a binding failure (400): before,
+          // the error was swallowed and the field kept its default.
+          on E: EBindingException do
+            raise;
           on E: Exception do
-          begin
-            // Silently continue with other fields on binding error
-            // Uncomment for debugging: SafeWriteln(Format('Warning: Error binding field "%s": %s', [Field.Name, E.Message]));
-          end;
+            raise EBindingException.CreateFmt('Field "%s": %s', [FieldName, E.Message]);
         end;
       end;
     finally
