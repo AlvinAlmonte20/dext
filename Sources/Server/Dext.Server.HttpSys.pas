@@ -171,6 +171,21 @@ type
     FSendOp: TDextHttpSysOperation;
     FNativeResponse: HTTP_RESPONSE;
     FChunks: TArray<HTTP_DATA_CHUNK>;
+    // Buffers that merge several writer segments when the body has more
+    // segments than one http.sys call accepts (see BuildEntityChunks). They
+    // live exactly as long as the writer segments: released where the writer
+    // is reset.
+    FCoalesced: TArray<TBytes>;
+    /// <summary>Fills FChunks with the writer segments and returns how many
+    ///   chunks to pass to http.sys. Above MaxEntityChunks segments, consecutive
+    ///   segments are copied into larger buffers so that the count stays within
+    ///   the limit.</summary>
+    function BuildEntityChunks: Integer;
+    /// <summary>Releases the segments and the merged buffers.</summary>
+    procedure ResetBody;
+    /// <summary>A send failed: cancel the request so that the client gets a
+    ///   reset instead of waiting until its own timeout.</summary>
+    procedure CancelRequest;
     procedure ResetUnknownHeaders;
     procedure SendHeadersInternal(AMoreData: Boolean);
     function _Release: Integer; stdcall;
@@ -1026,6 +1041,7 @@ begin
   // releases it, as the destructor does.
   FResponseWriter.Clear;
   FResponseWriter.Init;
+  FCoalesced := nil;
 
   FSendOp.Kind := hokSendBody;
   FSendOp.Context := AContext;
@@ -1096,7 +1112,7 @@ procedure TDextHttpSysResponse.Close;
 var
   I: Integer;
   Seg: PDextBufferSegment;
-  SegCount: Integer;
+  ChunkCount: Integer;
   TotalLen: Int64;
   Ret: ULONG;
   BytesSent: ULONG;
@@ -1148,21 +1164,10 @@ begin
         FNativeResponse.Headers.pUnknownHeaders := @FUnknownHeaders[0];
       end;
 
-      SegCount := FResponseWriter.SegmentCount;
-      if SegCount > 0 then
+      ChunkCount := BuildEntityChunks;
+      if ChunkCount > 0 then
       begin
-        SetLength(FChunks, SegCount);
-        Seg := FResponseWriter.Segments;
-        for I := 0 to SegCount - 1 do
-        begin
-          FillChar(FChunks[I], SizeOf(HTTP_DATA_CHUNK), 0);
-          FChunks[I].DataChunkType := hctFromMemory;
-          FChunks[I].pBuffer := Seg^.Data;
-          FChunks[I].BufferLength := Seg^.Length;
-          Inc(Seg);
-        end;
-
-        FNativeResponse.EntityChunkCount := SegCount;
+        FNativeResponse.EntityChunkCount := ChunkCount;
         FNativeResponse.pEntityChunks := @FChunks[0];
       end;
 
@@ -1182,34 +1187,26 @@ begin
         nil
       );
       if (Ret <> ERROR_SUCCESS) and (Ret <> ERROR_IO_PENDING) then
+      begin
+        CancelRequest;
         raise EOSError.Create('HttpSendHttpResponse failed with error code: ' + IntToStr(Ret));
+      end;
 
       FHeadersSent := True;
     end
     else
     begin
-      SegCount := FResponseWriter.SegmentCount;
+      ChunkCount := BuildEntityChunks;
       FillChar(FSendOp.Overlapped, SizeOf(TOverlapped), 0);
       FSendOp.Generation := FContext.FGeneration;
 
-      if SegCount > 0 then
+      if ChunkCount > 0 then
       begin
-        SetLength(FChunks, SegCount);
-        Seg := FResponseWriter.Segments;
-        for I := 0 to SegCount - 1 do
-        begin
-          FillChar(FChunks[I], SizeOf(HTTP_DATA_CHUNK), 0);
-          FChunks[I].DataChunkType := hctFromMemory;
-          FChunks[I].pBuffer := Seg^.Data;
-          FChunks[I].BufferLength := Seg^.Length;
-          Inc(Seg);
-        end;
-
         Ret := HttpSendResponseEntityBody(
           FReqQueue,
           FRequestId,
           0,
-          SegCount,
+          ChunkCount,
           @FChunks[0],
           BytesSent,
           nil,
@@ -1235,24 +1232,112 @@ begin
       end;
 
       if (Ret <> ERROR_SUCCESS) and (Ret <> ERROR_IO_PENDING) then
+      begin
+        CancelRequest;
         raise EOSError.Create('HttpSendResponseEntityBody failed with error code: ' + IntToStr(Ret));
+      end;
     end;
   except
     on E: Exception do
     begin
       FContext.FResponseIntf := nil;
       FContext.FRequestIntf := nil;
-      FResponseWriter.Reset;
+      ResetBody;
       raise;
     end;
   end;
 end;
 
+const
+  // At most 9,999 entity chunks per call. The documentation of
+  // HttpSendResponseEntityBody states this limit; on HttpSendHttpResponse it
+  // was measured: 9,999 chunks are sent, 10,000 fail with
+  // ERROR_INVALID_PARAMETER (87). EntityChunkCount is also a USHORT, so the
+  // count must never go above 65,535 anyway.
+  MaxEntityChunks = 9999;
+
+function TDextHttpSysResponse.BuildEntityChunks: Integer;
+var
+  SegCount, PerChunk, Chunk, First, Last, I: Integer;
+  Seg: PDextBufferSegment;
+  Size, Offset: NativeInt;
+begin
+  SegCount := FResponseWriter.SegmentCount;
+  if SegCount = 0 then
+    Exit(0);
+  Seg := FResponseWriter.Segments;
+  if SegCount <= MaxEntityChunks then
+  begin
+    // The common case: one chunk per segment, no copy.
+    SetLength(FChunks, SegCount);
+    for I := 0 to SegCount - 1 do
+    begin
+      FillChar(FChunks[I], SizeOf(HTTP_DATA_CHUNK), 0);
+      FChunks[I].DataChunkType := hctFromMemory;
+      FChunks[I].pBuffer := Seg^.Data;
+      FChunks[I].BufferLength := Seg^.Length;
+      Inc(Seg);
+    end;
+    Exit(SegCount);
+  end;
+
+  // Too many segments for one call (a body of about 40 MB or more with 4 KB
+  // segments): copy each run of PerChunk consecutive segments into one buffer.
+  // The copy happens only here, so smaller responses are sent as before.
+  PerChunk := (SegCount + MaxEntityChunks - 1) div MaxEntityChunks;
+  Result := (SegCount + PerChunk - 1) div PerChunk;
+  SetLength(FChunks, Result);
+  SetLength(FCoalesced, Result);
+  for Chunk := 0 to Result - 1 do
+  begin
+    First := Chunk * PerChunk;
+    Last := First + PerChunk - 1;
+    if Last > SegCount - 1 then
+      Last := SegCount - 1;
+    Size := 0;
+    Seg := FResponseWriter.Segments;
+    Inc(Seg, First);
+    for I := First to Last do
+    begin
+      Inc(Size, Seg^.Length);
+      Inc(Seg);
+    end;
+    SetLength(FCoalesced[Chunk], Size);
+    Offset := 0;
+    Seg := FResponseWriter.Segments;
+    Inc(Seg, First);
+    for I := First to Last do
+    begin
+      if Seg^.Length > 0 then
+        Move(Seg^.Data^, FCoalesced[Chunk][Offset], Seg^.Length);
+      Inc(Offset, Seg^.Length);
+      Inc(Seg);
+    end;
+    FillChar(FChunks[Chunk], SizeOf(HTTP_DATA_CHUNK), 0);
+    FChunks[Chunk].DataChunkType := hctFromMemory;
+    if Size > 0 then
+      FChunks[Chunk].pBuffer := @FCoalesced[Chunk][0];
+    FChunks[Chunk].BufferLength := Size;
+  end;
+end;
+
+procedure TDextHttpSysResponse.ResetBody;
+begin
+  FResponseWriter.Reset;
+  FCoalesced := nil;
+end;
+
+procedure TDextHttpSysResponse.CancelRequest;
+begin
+  // Without this the request stays open after a failed send: no response and
+  // no reset reach the client, which waits until its own timeout.
+  HttpCancelHttpRequest(FReqQueue, FRequestId, nil);
+end;
+
 procedure TDextHttpSysResponse.Flush;
 var
   I: Integer;
-  Seg: PDextBufferSegment;
-  SegCount: Integer;
+  ChunkCount: Integer;
   Ret: ULONG;
   BytesSent: ULONG;
 begin
@@ -1288,21 +1373,10 @@ begin
       FNativeResponse.Headers.pUnknownHeaders := @FUnknownHeaders[0];
     end;
 
-    SegCount := FResponseWriter.SegmentCount;
-    if SegCount > 0 then
+    ChunkCount := BuildEntityChunks;
+    if ChunkCount > 0 then
     begin
-      SetLength(FChunks, SegCount);
-      Seg := FResponseWriter.Segments;
-      for I := 0 to SegCount - 1 do
-      begin
-        FillChar(FChunks[I], SizeOf(HTTP_DATA_CHUNK), 0);
-        FChunks[I].DataChunkType := hctFromMemory;
-        FChunks[I].pBuffer := Seg^.Data;
-        FChunks[I].BufferLength := Seg^.Length;
-        Inc(Seg);
-      end;
-
-      FNativeResponse.EntityChunkCount := SegCount;
+      FNativeResponse.EntityChunkCount := ChunkCount;
       FNativeResponse.pEntityChunks := @FChunks[0];
     end;
 
@@ -1323,7 +1397,10 @@ begin
     );
 
     if (Ret <> ERROR_SUCCESS) and (Ret <> ERROR_IO_PENDING) then
+    begin
+      CancelRequest;
       raise EOSError.Create('HttpSendHttpResponse failed with error code: ' + IntToStr(Ret));
+    end;
 
     FHeadersSent := True;
   except
@@ -1331,7 +1408,7 @@ begin
     begin
       FContext.FResponseIntf := nil;
       FContext.FRequestIntf := nil;
-      FResponseWriter.Reset;
+      ResetBody;
       raise;
     end;
   end;
@@ -2677,7 +2754,7 @@ begin
           if Op^.Generation <> Context.FGeneration then
             Continue;
           if Context.FResponse <> nil then
-            Context.FResponse.FResponseWriter.Reset;
+            Context.FResponse.ResetBody;
           Context.FResponseIntf := nil;
           Context.FRequestIntf := nil;
         end;
