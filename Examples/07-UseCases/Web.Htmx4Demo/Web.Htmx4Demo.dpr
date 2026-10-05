@@ -153,8 +153,8 @@ begin
 
     Host := Builder.Build;
     (Host as IWebApplication).UseNativeServer;
-    // 8080 fica com o Web.SslDemo. http.sys não aceita http://+:8080/ e https://+:8080/ juntos.
-    Host.Run(8091);
+    // Port comes from UseUrls(DemoPort). IWebHost.Run has no overload with Port.
+    Host.Run;
     Host.Stop;
 
   except
