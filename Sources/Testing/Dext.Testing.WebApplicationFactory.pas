@@ -75,6 +75,12 @@ type
   TDextApplicationFactory<TApp: class> = class
   private
     FApp: TWebApplication;
+    // TWebApplication is reference counted (TInterfacedObject). Without an
+    // interface reference, a configure step that gets the application back as
+    // IWebApplication (MapControllers returns Self) would free it when that
+    // temporary interface is released. This reference keeps it alive and is
+    // the one that frees it.
+    FAppRef: IWebApplication;
     FConfigureServicesProc: TProc<IServiceCollection>;
     FConfigureAppProc: TProc<TWebApplication>;
     FPipeline: TRequestDelegate;
@@ -783,8 +789,8 @@ begin
   if FApp <> nil then
   begin
     FApp.Stop;
-    FApp.Free;
     FApp := nil;
+    FAppRef := nil; // Frees the application
   end;
   inherited Destroy;
 end;
@@ -819,6 +825,7 @@ begin
   if FApp = nil then
   begin
     FApp := TWebApplication.Create;
+    FAppRef := FApp;
     if Assigned(FConfigureServicesProc) then
       FConfigureServicesProc(FApp.GetServices.Collection);
     if Assigned(FConfigureAppProc) then
