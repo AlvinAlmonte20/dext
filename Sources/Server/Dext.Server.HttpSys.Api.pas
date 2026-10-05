@@ -454,6 +454,7 @@ function HttpReceiveRequestEntityBody(ReqQueueHandle: THandle; RequestId: HTTP_R
 
 function HttpSendHttpResponse(ReqQueueHandle: THandle; RequestId: HTTP_REQUEST_ID; Flags: ULONG; pHttpResponse: PHTTP_RESPONSE; pReserved1: Pointer; var BytesSent: ULONG; pReserved2: Pointer; Reserved3: ULONG; pOverlapped: POverlapped; pLogData: Pointer): ULONG; stdcall; external HTTPAPI_DLL;
 function HttpSendResponseEntityBody(ReqQueueHandle: THandle; RequestId: HTTP_REQUEST_ID; Flags: ULONG; EntityChunkCount: USHORT; pEntityChunks: Pointer; var BytesSent: ULONG; pReserved1: Pointer; pReserved2: Pointer; pOverlapped: POverlapped; pLogData: Pointer): ULONG; stdcall; external HTTPAPI_DLL;
+function HttpCancelHttpRequest(ReqQueueHandle: THandle; RequestId: HTTP_REQUEST_ID; pOverlapped: POverlapped): ULONG; stdcall; external HTTPAPI_DLL;
 
 type
   HTTP_SERVICE_CONFIG_ID = (
