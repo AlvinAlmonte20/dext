@@ -35,7 +35,8 @@ interface
 
 uses
   System.SysUtils,
-  DextJsonDataObjects,
+  Dext.Json.Types,
+  Dext.Core.Json.NextGen,
   Dext.Testing,
   Dext.AI.MCP.Server,
   Dext.AI.MCP.Tools,
@@ -63,7 +64,15 @@ type
     [Test]
     procedure ToolsCall_RoundTripsRegisteredTool;
     [Test]
+    procedure ToolsCall_ReturnsJsonContentProperly;
+    [Test]
+    procedure ToolsCall_HandlesErrorResult;
+    [Test]
     procedure Initialize_NegotiatesProtocolVersionAndCreatesSession;
+    [Test]
+    procedure NestedOwnedObjects_FreeWithoutAV;
+    [Test]
+    procedure Initialize_RepeatedCalls_NoAV;
   end;
 
 implementation
@@ -88,7 +97,7 @@ begin
     Response := Server.Dispatch('{"jsonrpc":"2.0","id":1,"method":"tools/list"}');
     Root := ParseResponse(Response);
     try
-      Should(Root.Types['id'] = jdtInt).BeTrue;
+      Should(Root.Types['id'] = TDextJsonNodeType.jntNumber).BeTrue;
       Should(Root.I['id']).Be(1);
     finally
       Root.Free;
@@ -109,7 +118,7 @@ begin
     Response := Server.Dispatch('{"jsonrpc":"2.0","id":"abc","method":"ping"}');
     Root := ParseResponse(Response);
     try
-      Should(Root.Types['id'] = jdtString).BeTrue;
+      Should(Root.Types['id'] = TDextJsonNodeType.jntString).BeTrue;
       Should(Root.S['id']).Be('abc');
     finally
       Root.Free;
@@ -146,9 +155,9 @@ begin
     Response := Server.Dispatch('{"jsonrpc":"2.0","id":5,"method":"totally/unknown"}');
     Root := ParseResponse(Response);
     try
-      Should(Root.Types['id'] = jdtInt).BeTrue;
+      Should(Root.Types['id'] = TDextJsonNodeType.jntNumber).BeTrue;
       Should(Root.I['id']).Be(5);
-      Should(Root.Types['error'] = jdtObject).BeTrue;
+      Should(Root.Types['error'] = TDextJsonNodeType.jntObject).BeTrue;
       ErrObj := Root.O['error'];
       Should(ErrObj.I['code']).Be(JSONRPC_METHOD_NOT_FOUND);
     finally
@@ -170,8 +179,7 @@ begin
     Response := Server.Dispatch('');
     Root := ParseResponse(Response);
     try
-      Should(Root.Types['id'] = jdtObject).BeTrue; // explicit null
-      Should(Root.O['id'] = nil).BeTrue;
+      Should(Root.Types['id'] = TDextJsonNodeType.jntNull).BeTrue; // explicit null
       ErrObj := Root.O['error'];
       Should(ErrObj.I['code']).Be(JSONRPC_INVALID_REQUEST);
     finally
@@ -226,12 +234,104 @@ begin
     Root := ParseResponse(Response);
     try
       Should(Root.I['id']).Be(42);
-      Should(Root.Types['result'] = jdtObject).BeTrue;
+      Should(Root.Types['result'] = TDextJsonNodeType.jntObject).BeTrue;
       ResultObj := Root.O['result'];
-      Should(ResultObj.Types['content'] = jdtArray).BeTrue;
+      Should(ResultObj.Types['content'] = TDextJsonNodeType.jntArray).BeTrue;
       ContentArr := ResultObj.A['content'];
       Should(ContentArr.Count).Be(1);
       Should(ContentArr.O[0].S['text']).Be('echo:hi');
+    finally
+      Root.Free;
+    end;
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure TMCPDispatchTests.ToolsCall_ReturnsJsonContentProperly;
+var
+  Server: TMCPServer;
+  Response: string;
+  Root, ResultObj: TJsonObject;
+  ContentArr: TJsonArray;
+  ItemObj: TJsonObject;
+  InnerObj: TJsonObject;
+begin
+  Server := TMCPServer.Create('test-server');
+  try
+    Server.Tool('get_data')
+      .Description('Returns complex JSON data')
+      .Param('id', 'Record ID', ptInteger)
+      .OnCallResult(function(const Args: TJsonObject): TMCPToolResult
+        var
+          JObj: TJsonObject;
+        begin
+          JObj := TJsonObject.Create;
+          JObj.I['id'] := Args.I['id'];
+          JObj.S['name'] := 'Sample ' + Args.I['id'].ToString;
+          JObj.B['active'] := True;
+          // Returns JSON formatted as text
+          Result := TMCPToolResult.Text(JObj.ToJson);
+          JObj.Free;
+        end);
+
+    Response := Server.Dispatch(
+      '{"jsonrpc":"2.0","id":100,"method":"tools/call",' +
+      '"params":{"name":"get_data","arguments":{"id":777}}}');
+    Root := ParseResponse(Response);
+    try
+      Should(Root.I['id']).Be(100);
+      Should(Root.Types['result'] = TDextJsonNodeType.jntObject).BeTrue;
+      ResultObj := Root.O['result'];
+      Should(ResultObj.Types['content'] = TDextJsonNodeType.jntArray).BeTrue;
+      ContentArr := ResultObj.A['content'];
+      Should(ContentArr.Count).Be(1);
+      ItemObj := ContentArr.O[0];
+      Should(ItemObj.S['type']).Be('text');
+      
+      // Parse the text content back to verify JSON integrity
+      InnerObj := ParseResponse(ItemObj.S['text']);
+      try
+        Should(InnerObj.I['id']).Be(777);
+        Should(InnerObj.S['name']).Be('Sample 777');
+        Should(InnerObj.B['active']).BeTrue;
+      finally
+        InnerObj.Free;
+      end;
+    finally
+      Root.Free;
+    end;
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure TMCPDispatchTests.ToolsCall_HandlesErrorResult;
+var
+  Server: TMCPServer;
+  Response: string;
+  Root, ResultObj: TJsonObject;
+  ContentArr: TJsonArray;
+begin
+  Server := TMCPServer.Create('test-server');
+  try
+    Server.Tool('fail_op')
+      .Description('Failing tool')
+      .OnCallResult(function(const Args: TJsonObject): TMCPToolResult
+        begin
+          Result := TMCPToolResult.Error('Operation failed intentionally');
+        end);
+
+    Response := Server.Dispatch(
+      '{"jsonrpc":"2.0","id":101,"method":"tools/call",' +
+      '"params":{"name":"fail_op","arguments":{}}}');
+    Root := ParseResponse(Response);
+    try
+      Should(Root.I['id']).Be(101);
+      ResultObj := Root.O['result'];
+      Should(ResultObj.B['isError']).BeTrue;
+      ContentArr := ResultObj.A['content'];
+      Should(ContentArr.O[0].S['text']).Be('Operation failed intentionally');
     finally
       Root.Free;
     end;
@@ -253,11 +353,68 @@ begin
       '"params":{"protocolVersion":"2024-11-05","clientInfo":{"name":"test","version":"1.0"}}}');
     Root := ParseResponse(Response);
     try
-      Should(Root.Types['result'] = jdtObject).BeTrue;
+      Should(Root.Types['result'] = TDextJsonNodeType.jntObject).BeTrue;
       ResultObj := Root.O['result'];
       Should(ResultObj.S['protocolVersion']).Be('2024-11-05');
     finally
       Root.Free;
+    end;
+  finally
+    Server.Free;
+  end;
+end;
+
+procedure TMCPDispatchTests.NestedOwnedObjects_FreeWithoutAV;
+var
+  Root, Child, Grand: TJsonObject;
+  Arr: TJsonArray;
+  I: Integer;
+begin
+  { Regression: FreeNode used to Free a non-refcounted child while an
+    interface temporary still pointed at it → AV at IntfClear (0x80808088). }
+  for I := 1 to 50 do
+  begin
+    Root := TJsonObject.Create;
+    Child := TJsonObject.Create;
+    Grand := TJsonObject.Create;
+    Arr := TJsonArray.Create;
+    try
+      Grand.S['name'] := 'g';
+      Child.O['grand'] := Grand;
+      Child.B['ok'] := True;
+      Arr.Add(TJsonObject.Create);
+      Arr.O[0].S['i'] := IntToStr(I);
+      Root.O['child'] := Child;
+      Root.A['items'] := Arr;
+      Should(Root.O['child'].O['grand'].S['name']).Be('g');
+    finally
+      Root.Free;
+    end;
+  end;
+end;
+
+procedure TMCPDispatchTests.Initialize_RepeatedCalls_NoAV;
+var
+  Server: TMCPServer;
+  Response: string;
+  Root: TJsonObject;
+  I: Integer;
+begin
+  Server := TMCPServer.Create('test-server', '1.0.0');
+  try
+    for I := 1 to 20 do
+    begin
+      Response := Server.Dispatch(
+        '{"jsonrpc":"2.0","id":' + IntToStr(I) + ',"method":"initialize",' +
+        '"params":{"protocolVersion":"2025-03-26","capabilities":{},' +
+        '"clientInfo":{"name":"leak-test","version":"1.0.0"}}}');
+      Root := ParseResponse(Response);
+      try
+        Should(Root.O['result'].S['protocolVersion']).Be('2025-03-26');
+        Should(Root.O['result'].O['serverInfo'].S['name']).Be('test-server');
+      finally
+        Root.Free;
+      end;
     end;
   finally
     Server.Free;

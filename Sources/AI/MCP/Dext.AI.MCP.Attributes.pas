@@ -29,11 +29,11 @@
 {          [MCPTool('search', 'Full-text search across all records')]               }
 {          [MCPParam('query',  'Search term',    ptString)]                         }
 {          [MCPParam('limit',  'Max results',    ptInteger, False)]                 }
-{          function Search(const Args: TJSONObject): TMCPToolResult; virtual;       }
+{          function Search(const Args: TJsonObject): TMCPToolResult; virtual;       }
 {                                                                                   }
 {          [MCPTool('delete-record', 'Permanently deletes a record')]               }
 {          [MCPParam('id', 'Record ID', ptString)]                                  }
-{          function DeleteRecord(const Args: TJSONObject): TMCPToolResult; virtual; }
+{          function DeleteRecord(const Args: TJsonObject): TMCPToolResult; virtual; }
 {        end;                                                                       }
 {                                                                                   }
 {      Server.RegisterProvider(TMyTools.Create);                                    }
@@ -45,7 +45,7 @@
 {    Prompt providers:                                                              }
 {      [MCPPrompt('code-review', 'Performs a thorough code review')]                }
 {      [MCPPromptArg('language', 'Programming language', False)]                    }
-{      function CodeReview(const Args: TJSONObject): TMCPPromptResult; virtual;     }
+{      function CodeReview(const Args: TJsonObject): TMCPPromptResult; virtual;     }
 {                                                                                   }
 {***********************************************************************************}
 unit Dext.AI.MCP.Attributes;
@@ -63,7 +63,7 @@ type
 
   /// <summary>
   /// Marks a provider method as an MCP tool.
-  /// The method must have signature: function(const Args: TJSONObject): TMCPToolResult.
+  /// The method must have signature: function(const Args: TJsonObject): TMCPToolResult.
   /// </summary>
   MCPToolAttribute = class(TCustomAttribute)
   private

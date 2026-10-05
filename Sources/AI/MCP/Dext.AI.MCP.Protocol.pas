@@ -34,7 +34,8 @@ interface
 
 uses
   System.SysUtils,
-  DextJsonDataObjects,
+  Dext.Json.Types,
+  Dext.Core.Json.NextGen,
   Dext.AI.MCP.Types;
 
 const
@@ -112,13 +113,8 @@ type
   /// JSON-RPC 2.0 response builder.
   /// All methods produce a self-contained JSON string ready to send.
   ///
-  /// The JSON-RPC "id" (string | number | null) is represented as a
-  /// standalone TJsonDataValueHelper instead of a class hierarchy (unlike
-  /// System.JSON's TJSONValue, DextJsonDataObjects has no loose polymorphic
-  /// value type outside TJsonObject/TJsonArray). Pass a literal "nil" for a
-  /// missing/absent id - it resolves via the Pointer Implicit operator into
-  /// a value whose IsNull is True, same as an id that came back explicitly
-  /// null (the parser represents both the same way; see GetId below).
+  /// The JSON-RPC "id" (string | number | null) is represented as an
+  /// IDextJsonNode. Pass nil for a missing/absent id.
   /// </summary>
   TJsonRpc = class
   public
@@ -126,27 +122,24 @@ type
     /// Builds a success response.
     /// ResultJson is a raw JSON string that will be embedded as the "result" value.
     /// </summary>
-    class function Success(const Id: TJsonDataValueHelper; const ResultJson: string): string; overload;
+    class function Success(const Id: IDextJsonNode; const ResultJson: string): string; overload;
 
     /// <summary>
     /// Builds a success response from an already-built TJsonObject.
     /// Ownership of ResultObj is NOT taken - caller still frees it.
     /// </summary>
-    class function Success(const Id: TJsonDataValueHelper; const ResultObj: TJsonObject): string; overload;
+    class function Success(const Id: IDextJsonNode; const ResultObj: TJsonObject): string; overload;
 
     /// <summary>
     /// Builds an error response.
     /// </summary>
-    class function Error(const Id: TJsonDataValueHelper; Code: Integer; const Msg: string): string;
+    class function Error(const Id: IDextJsonNode; Code: Integer; const Msg: string): string;
 
     /// <summary>
     /// Extracts the "id" field from a JSON-RPC request object.
-    /// Returns a value whose IsNull is True if the "id" key is absent
-    /// (i.e. it is a notification) - the same as if "id" were present but
-    /// explicitly null, since DextJsonDataObjects' parser represents a
-    /// literal JSON null the same way it represents "nothing stored here".
+    /// Returns nil if the "id" key is absent or null.
     /// </summary>
-    class function GetId(const Req: TJsonObject): TJsonDataValueHelper;
+    class function GetId(const Req: TJsonObject): IDextJsonNode;
   end;
 
 implementation
@@ -178,93 +171,75 @@ end;
 
 { TJsonRpc }
 
-class function TJsonRpc.Success(const Id: TJsonDataValueHelper; const ResultJson: string): string;
+class function TJsonRpc.Success(const Id: IDextJsonNode; const ResultJson: string): string;
 var
-  Parsed: TJsonBaseObject;
   Obj: TJsonObject;
+  Content: string;
 begin
-  // TJsonBaseObject.Parse raises on syntactically invalid input instead of
-  // returning nil (unlike System.JSON's ParseJSONValue) - swallow it the
-  // same way the original fallback treated "not parseable" (embed the raw
-  // string as-is).
-  try
-    Parsed := TJsonBaseObject.Parse(ResultJson);
-  except
-    Parsed := nil;
-  end;
-
+  { Build envelope without re-parsing ResultJson. Re-Parse rented nested nodes
+    into the Indy worker pool and FastMM reported them as leaks on shutdown. }
   Obj := TJsonObject.Create;
   try
     Obj.S['jsonrpc'] := MCP_JSONRPC_VERSION;
-    // Values[Name] := Id clones the value (or copies the primitive) rather
-    // than aliasing it, even when Id is a live reference into a request
-    // object that outlives or outlasts this call - see SetInternValue.
-    Obj.Values['id'] := Id;
-
-    if Parsed = nil then
-      Obj.S['result'] := ResultJson
-    else if Parsed is TJsonObject then
-      // Transfers ownership of Parsed into Obj - no separate Free needed.
-      Obj.Values['result'] := TJsonObject(Parsed)
-    else if Parsed is TJsonArray then
-      Obj.Values['result'] := TJsonArray(Parsed)
+    if Id <> nil then
+      Obj.SetNode('id', Id)
     else
-      Parsed.Free;
-
-    Result := Obj.ToJSON;
+      Obj.SetNull('id');
+    Result := Obj.ToJson;
   finally
     Obj.Free;
   end;
+
+  if ResultJson <> '' then
+    Content := ResultJson
+  else
+    Content := '{}';
+
+  if (Result <> '') and (Result[Length(Result)] = '}') then
+    Result := Copy(Result, 1, Length(Result) - 1) + ',"result":' + Content + '}'
+  else
+    Result := '{"jsonrpc":"' + MCP_JSONRPC_VERSION + '","id":null,"result":' +
+      Content + '}';
 end;
 
-class function TJsonRpc.Success(const Id: TJsonDataValueHelper; const ResultObj: TJsonObject): string;
-var
-  Obj: TJsonObject;
+class function TJsonRpc.Success(const Id: IDextJsonNode; const ResultObj: TJsonObject): string;
 begin
-  Obj := TJsonObject.Create;
-  try
-    Obj.S['jsonrpc'] := MCP_JSONRPC_VERSION;
-    Obj.Values['id'] := Id;
-
-    if ResultObj <> nil then
-      // Clones ResultObj (Values[] copies rather than transfers when the
-      // source is a standalone/foreign object) - caller retains ownership,
-      // matching the original TJSONValue.Clone contract.
-      Obj.O['result'] := ResultObj.Clone as TJsonObject
-    else
-      Obj.O['result'] := TJsonObject.Create;
-
-    Result := Obj.ToJSON;
-  finally
-    Obj.Free;
-  end;
+  if ResultObj <> nil then
+    Result := Success(Id, ResultObj.ToJson)
+  else
+    Result := Success(Id, '{}');
 end;
 
-class function TJsonRpc.Error(const Id: TJsonDataValueHelper; Code: Integer; const Msg: string): string;
+class function TJsonRpc.Error(const Id: IDextJsonNode; Code: Integer; const Msg: string): string;
 var
   Obj, ErrObj: TJsonObject;
 begin
   Obj := TJsonObject.Create;
   try
     Obj.S['jsonrpc'] := MCP_JSONRPC_VERSION;
-    Obj.Values['id'] := Id;
+    if Id <> nil then
+      Obj.SetNode('id', Id)
+    else
+      Obj.SetNull('id');
 
-    ErrObj := Obj.O['error'];
+    ErrObj := TJsonObject.Create;
     ErrObj.I['code']    := Code;
     ErrObj.S['message'] := Msg;
+    Obj.O['error']      := ErrObj;
 
-    Result := Obj.ToJSON;
+    Result := Obj.ToJson;
   finally
     Obj.Free;
   end;
 end;
 
-class function TJsonRpc.GetId(const Req: TJsonObject): TJsonDataValueHelper;
+class function TJsonRpc.GetId(const Req: TJsonObject): IDextJsonNode;
 begin
   if (Req = nil) or not Req.Contains('id') then
-    Result := nil
-  else
-    Result := Req.Values['id'];
+    Exit(nil);
+  Result := Req.GetNode('id');
+  if (Result <> nil) and Result.IsNull then
+    Result := nil;
 end;
 
 end.

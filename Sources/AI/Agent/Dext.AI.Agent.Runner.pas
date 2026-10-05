@@ -38,8 +38,9 @@ uses
   Dext.AI.MCP.Types,
   Dext.AI.MCP.Protocol,
   Dext.Collections,
-  System.SysUtils,
-  DextJsonDataObjects;
+  Dext.Json.Types,
+  Dext.Core.Json.NextGen,
+  System.SysUtils;
 
 type
   TAgentRunner = class
@@ -109,7 +110,7 @@ begin
       Schema := Default(TToolSchema);
       Schema.Name        := Item.S['name'];
       Schema.Description := Item.S['description'];
-      if Item.Types['inputSchema'] = jdtObject then
+      if Item.Types['inputSchema'] = TDextJsonNodeType.jntObject then
         Schema.InputSchema := Item.O['inputSchema'].ToJSON
       else
         Schema.InputSchema := '{}';

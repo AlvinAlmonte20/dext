@@ -59,7 +59,8 @@ interface
 uses
   System.SysUtils,
   System.Classes,
-  DextJsonDataObjects,
+  Dext.Json.Types,
+  Dext.Core.Json.NextGen,
   System.SyncObjs,
   System.DateUtils,
   Dext.Collections,
@@ -139,17 +140,17 @@ type
     FTransport: TMCPTransport;
     FUrl: string;
 
-    function HandleInitialize(const Id: TJsonDataValueHelper; const Params: TJsonObject;
+    function HandleInitialize(const Id: IDextJsonNode; const Params: TJsonObject;
       out ANewSessionId: string): string;
-    function HandlePing(const Id: TJsonDataValueHelper): string;
-    function HandleToolsList(const Id: TJsonDataValueHelper): string;
-    function HandleToolsCall(const Id: TJsonDataValueHelper;
+    function HandlePing(const Id: IDextJsonNode): string;
+    function HandleToolsList(const Id: IDextJsonNode): string;
+    function HandleToolsCall(const Id: IDextJsonNode;
       const Params: TJsonObject): string;
-    function HandleResourcesList(const Id: TJsonDataValueHelper): string;
-    function HandleResourcesRead(const Id: TJsonDataValueHelper;
+    function HandleResourcesList(const Id: IDextJsonNode): string;
+    function HandleResourcesRead(const Id: IDextJsonNode;
       const Params: TJsonObject): string;
-    function HandlePromptsList(const Id: TJsonDataValueHelper): string;
-    function HandlePromptsGet(const Id: TJsonDataValueHelper;
+    function HandlePromptsList(const Id: IDextJsonNode): string;
+    function HandlePromptsGet(const Id: IDextJsonNode;
       const Params: TJsonObject): string;
 
     // ---- HTTP route handlers (Streamable) ----
@@ -369,10 +370,12 @@ var
   ContentItem: TJsonObject;
 begin
   Result := TJsonObject.Create;
-  ContentArr := Result.A['content'];
-  ContentItem := ContentArr.AddObject;
+  ContentArr := TJsonArray.Create;
+  ContentItem := TJsonObject.Create;
   ContentItem.S['type'] := 'text';
   ContentItem.S['text'] := CallResult;
+  ContentArr.Add(ContentItem);
+  Result.A['content'] := ContentArr;
 end;
 
 class procedure TMCPServer.AddCORSHeaders(const Response: IHttpResponse);
@@ -400,7 +403,7 @@ var
   Parsed: TJsonBaseObject;
   Req: TJsonObject;
   Method: string;
-  Id: TJsonDataValueHelper;
+  Id: IDextJsonNode;
   Params: TJsonObject;
   IgnoredSessionId: string;
 begin
@@ -427,7 +430,7 @@ begin
     Method := Req.S['method'];
 
     Params := nil;
-    if Req.Types['params'] = jdtObject then
+    if Req.Types['params'] = TDextJsonNodeType.jntObject then
       Params := Req.O['params'];
 
     if Method = 'notifications/initialized' then
@@ -456,18 +459,18 @@ begin
     else
     begin
       // A missing "id" (notification) means we must not respond, even for
-      // an unknown method - IsNull also covers an explicit "id":null since
-      // the parser represents both the same way (see TJsonRpc.GetId).
-      if not Id.IsNull then
+      // an unknown method.
+      if (Id <> nil) and not Id.IsNull then
         Result := TJsonRpc.Error(Id, JSONRPC_METHOD_NOT_FOUND,
           'Method not found: ' + Method);
     end;
   finally
+    Id := nil; // drop id wrapper before freeing the request tree
     Req.Free;
   end;
 end;
 
-function TMCPServer.HandleInitialize(const Id: TJsonDataValueHelper;
+function TMCPServer.HandleInitialize(const Id: IDextJsonNode;
   const Params: TJsonObject; out ANewSessionId: string): string;
 var
   ResultObj, ServerInfo, Caps: TJsonObject;
@@ -500,27 +503,32 @@ begin
     ResultObj.S['protocolVersion'] := AgreedProtoVer;
 
     // Advertise capabilities based on what is registered
-    Caps := ResultObj.O['capabilities'];
+    Caps := TJsonObject.Create;
+    ResultObj.O['capabilities'] := Caps;
 
-    ToolsCap := Caps.O['tools'];
+    ToolsCap := TJsonObject.Create;
     ToolsCap.B['listChanged'] := False;
+    Caps.O['tools'] := ToolsCap;
 
     if FResources.Count > 0 then
     begin
-      ResourcesCap := Caps.O['resources'];
+      ResourcesCap := TJsonObject.Create;
       ResourcesCap.B['subscribe'] := False;
       ResourcesCap.B['listChanged'] := False;
+      Caps.O['resources'] := ResourcesCap;
     end;
 
     if FPrompts.Count > 0 then
     begin
-      PromptsCap := Caps.O['prompts'];
+      PromptsCap := TJsonObject.Create;
       PromptsCap.B['listChanged'] := False;
+      Caps.O['prompts'] := PromptsCap;
     end;
 
-    ServerInfo := ResultObj.O['serverInfo'];
+    ServerInfo := TJsonObject.Create;
     ServerInfo.S['name'] := FName;
     ServerInfo.S['version'] := FVersion;
+    ResultObj.O['serverInfo'] := ServerInfo;
 
     Result := TJsonRpc.Success(Id, ResultObj);
   finally
@@ -528,7 +536,7 @@ begin
   end;
 end;
 
-function TMCPServer.HandlePing(const Id: TJsonDataValueHelper): string;
+function TMCPServer.HandlePing(const Id: IDextJsonNode): string;
 var
   Empty: TJsonObject;
 begin
@@ -540,7 +548,7 @@ begin
   end;
 end;
 
-function TMCPServer.HandleToolsList(const Id: TJsonDataValueHelper): string;
+function TMCPServer.HandleToolsList(const Id: IDextJsonNode): string;
 var
   ResultObj: TJsonObject;
   ToolsArr: TJsonArray;
@@ -555,7 +563,7 @@ begin
   end;
 end;
 
-function TMCPServer.HandleToolsCall(const Id: TJsonDataValueHelper;
+function TMCPServer.HandleToolsCall(const Id: IDextJsonNode;
   const Params: TJsonObject): string;
 var
   ToolName: string;
@@ -577,11 +585,8 @@ begin
     Exit(TJsonRpc.Error(Id, MCP_ERROR_TOOL_NOT_FOUND,
       'Tool not found: ' + ToolName));
 
-  // "arguments" absent AND "arguments": null explicit both surface as
-  // jdtObject with a nil pointer from Params.O[] - treat both as "no args"
-  // rather than handing tool callbacks a nil TJsonObject.
   ArgsObj := nil;
-  if Params.Types['arguments'] = jdtObject then
+  if Params.Types['arguments'] = TDextJsonNodeType.jntObject then
     ArgsObj := Params.O['arguments'];
   if ArgsObj = nil then
   begin
@@ -635,7 +640,7 @@ begin
   end;
 end;
 
-function TMCPServer.HandleResourcesList(const Id: TJsonDataValueHelper): string;
+function TMCPServer.HandleResourcesList(const Id: IDextJsonNode): string;
 var
   ResultObj: TJsonObject;
   ResArr: TJsonArray;
@@ -650,7 +655,7 @@ begin
   end;
 end;
 
-function TMCPServer.HandleResourcesRead(const Id: TJsonDataValueHelper;
+function TMCPServer.HandleResourcesRead(const Id: IDextJsonNode;
   const Params: TJsonObject): string;
 var
   Uri: string;
@@ -671,15 +676,16 @@ begin
 
   ResultObj := TJsonObject.Create;
   try
-    ContentsArr := ResultObj.A['contents'];
+    ContentsArr := TJsonArray.Create;
     ContentsArr.Add(Contents.ToJSON);
+    ResultObj.A['contents'] := ContentsArr;
     Result := TJsonRpc.Success(Id, ResultObj);
   finally
     ResultObj.Free;
   end;
 end;
 
-function TMCPServer.HandlePromptsList(const Id: TJsonDataValueHelper): string;
+function TMCPServer.HandlePromptsList(const Id: IDextJsonNode): string;
 var
   ResultObj: TJsonObject;
   PromptsArr: TJsonArray;
@@ -694,7 +700,7 @@ begin
   end;
 end;
 
-function TMCPServer.HandlePromptsGet(const Id: TJsonDataValueHelper;
+function TMCPServer.HandlePromptsGet(const Id: IDextJsonNode;
   const Params: TJsonObject): string;
 var
   PromptName: string;
@@ -711,7 +717,7 @@ begin
     Exit(TJsonRpc.Error(Id, JSONRPC_INVALID_PARAMS, 'Missing prompt name'));
 
   ArgsObj := nil;
-  if Params.Types['arguments'] = jdtObject then
+  if Params.Types['arguments'] = TDextJsonNodeType.jntObject then
     ArgsObj := Params.O['arguments'];
   if ArgsObj = nil then
   begin
@@ -746,7 +752,7 @@ var
   SessionId, Body, Response, Method, NewSessionId: string;
   Parsed: TJsonBaseObject;
   ReqObj: TJsonObject;
-  Id: TJsonDataValueHelper;
+  Id: IDextJsonNode;
   Params: TJsonObject;
 begin
   // CORS preflight
@@ -782,7 +788,7 @@ begin
         // Handle initialize directly so we can capture the new session ID
         Id     := TJsonRpc.GetId(ReqObj);
         Params := nil;
-        if ReqObj.Types['params'] = jdtObject then
+        if ReqObj.Types['params'] = TDextJsonNodeType.jntObject then
           Params := ReqObj.O['params'];
 
         NewSessionId := '';
@@ -805,6 +811,7 @@ begin
         Response := Dispatch(Body, SessionId);
       end;
     finally
+      Id := nil; // drop id wrapper before freeing the request tree
       ReqObj.Free;
     end;
   end

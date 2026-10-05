@@ -44,7 +44,7 @@ interface
 
 uses
   System.SysUtils,
-  DextJsonDataObjects;
+  Dext.Core.Json.NextGen;
 
 type
   /// <summary>Discriminated type tag for MCP content items.</summary>
@@ -258,9 +258,7 @@ begin
     mctResource:
     begin
       Res.S['type'] := 'resource';
-      // Res.O['resource'] auto-cria e já anexa o objeto vazio a Res — não
-      // precisa de atribuição separada como em System.JSON's AddPair.
-      ResObj := Res.O['resource'];
+      ResObj := TJsonObject.Create;
       ResObj.S['uri'] := FResourceUri;
       if FResourceMimeType <> '' then
         ResObj.S['mimeType'] := FResourceMimeType;
@@ -268,6 +266,7 @@ begin
         ResObj.S['blob'] := FResourceBlob
       else
         ResObj.S['text'] := FResourceText;
+      Res.O['resource'] := ResObj;
     end;
   end;
   Result := Res;
@@ -328,9 +327,10 @@ var
   Item: TMCPContent;
 begin
   Result := TJsonObject.Create;
-  ContentArr := Result.A['content'];
+  ContentArr := TJsonArray.Create;
   for Item in Content do
     ContentArr.Add(Item.ToJSON);
+  Result.A['content'] := ContentArr;
   if IsError then
     Result.B['isError'] := True;
 end;
@@ -422,9 +422,10 @@ begin
   Result := TJsonObject.Create;
   if Description <> '' then
     Result.S['description'] := Description;
-  MsgsArr := Result.A['messages'];
+  MsgsArr := TJsonArray.Create;
   for Msg in Messages do
     MsgsArr.Add(Msg.ToJSON);
+  Result.A['messages'] := MsgsArr;
 end;
 
 end.
