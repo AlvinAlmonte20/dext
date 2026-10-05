@@ -44,6 +44,7 @@ interface
 
 uses
   System.SysUtils,
+  Dext.Json.Types,
   Dext.Core.Json.NextGen;
 
 type

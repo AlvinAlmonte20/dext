@@ -35,7 +35,8 @@ interface
 uses
   System.SysUtils,
   System.Classes,
-  DextJsonDataObjects,
+  Dext.Core.Json.NextGen,
+  Dext.Json.Types,
   Dext.Net.RestClient,
   Dext.AI.Agent.Contracts;
 
@@ -116,18 +117,21 @@ begin
         if AMessage.Content <> '' then
           Result.S['content'] := AMessage.Content
         else
-          // Objeto nulo explícito (não ausência de chave) — TJsonObject
-          // serializa "O[Name] := nil" como "content": null, exigido pela
-          // API quando a resposta é só tool_calls, sem texto.
-          Result.O['content'] := nil;
+          // Null explícito (não ausência de chave) — SetNull serializa
+          // "content": null, exigido pela API quando a resposta é só
+          // tool_calls, sem texto.
+          Result.SetNull('content');
 
-        ToolCallsArr := Result.A['tool_calls'];
+        ToolCallsArr := TJsonArray.Create;
+        Result.A['tool_calls'] := ToolCallsArr;
         for TC in AMessage.ToolCalls do
         begin
-          TCObj := ToolCallsArr.AddObject;
+          TCObj := TJsonObject.Create;
+          ToolCallsArr.Add(TCObj);
           TCObj.S['id'] := TC.Id;
           TCObj.S['type'] := 'function';
-          FnObj := TCObj.O['function'];
+          FnObj := TJsonObject.Create;
+          TCObj.O['function'] := FnObj;
           FnObj.S['name'] := TC.Name;
           FnObj.S['arguments'] := TC.ArgsJson;
         end;
@@ -152,7 +156,8 @@ begin
   Result := TJsonObject.Create;
   Result.S['type'] := 'function';
 
-  FnObj := Result.O['function'];
+  FnObj := TJsonObject.Create;
+  Result.O['function'] := FnObj;
   FnObj.S['name'] := ATool.Name;
   FnObj.S['description'] := ATool.Description;
 
@@ -177,13 +182,15 @@ begin
   Result.S['model'] := FModel;
   Result.I['max_tokens'] := FMaxTokens;
 
-  MsgsArr := Result.A['messages'];
+  MsgsArr := TJsonArray.Create;
+  Result.A['messages'] := MsgsArr;
   for Msg in AMessages do
     MsgsArr.Add(BuildMessageJSON(Msg));
 
   if Length(ATools) > 0 then
   begin
-    ToolsArr := Result.A['tools'];
+    ToolsArr := TJsonArray.Create;
+    Result.A['tools'] := ToolsArr;
     for Tool in ATools do
       ToolsArr.Add(BuildToolJSON(Tool));
   end;
@@ -226,28 +233,26 @@ begin
   end;
   Root := TJsonObject(Parsed);
   try
-    if (Root.Types['choices'] <> jdtArray) or (Root.A['choices'].Count = 0) then
+    if (Root.Types['choices'] <> TDextJsonNodeType.jntArray) or (Root.A['choices'].Count = 0) then
       raise ELLMProviderError.CreateFmt('OpenAI: resposta sem choices: %s', [ABody]);
     Choices := Root.A['choices'];
 
     Choice := Choices.O[0];
     FinishReason := Choice.S['finish_reason'];
 
-    if (Choice.Types['message'] <> jdtObject) or (Choice.O['message'] = nil) then
+    if (Choice.Types['message'] <> TDextJsonNodeType.jntObject) or (Choice.O['message'] = nil) then
       raise ELLMProviderError.CreateFmt('OpenAI: choice sem message: %s', [ABody]);
     Message := Choice.O['message'];
 
-    // "content" ausente ou explicitamente null (resposta só com tool_calls) é
-    // representado internamente como jdtObject com ponteiro nil pelo parser
-    // — TJsonObject.S[] lança EJsonCastException se usado direto num valor
-    // desses ("Cannot cast Object into String"), então precisa checar o tipo
-    // antes de ler como string.
-    if Message.Types['content'] = jdtString then
+    // "content" ausente ou explicitamente null (resposta só com tool_calls) vem
+    // como jntNull no NextGen — S[] lança se usado direto num valor null,
+    // então precisa checar o tipo antes de ler como string.
+    if Message.Types['content'] = TDextJsonNodeType.jntString then
       Result.Content := Message.S['content']
     else
       Result.Content := '';
 
-    if Message.Types['tool_calls'] = jdtArray then
+    if Message.Types['tool_calls'] = TDextJsonNodeType.jntArray then
     begin
       ToolCallsArr := Message.A['tool_calls'];
       SetLength(ToolCalls, ToolCallsArr.Count);
@@ -256,11 +261,11 @@ begin
         TCObj := ToolCallsArr.O[I];
         TC := Default(TLLMToolCall);
         TC.Id := TCObj.S['id'];
-        if TCObj.Types['function'] = jdtObject then
+        if TCObj.Types['function'] = TDextJsonNodeType.jntObject then
         begin
           FnObj := TCObj.O['function'];
           TC.Name := FnObj.S['name'];
-          if FnObj.Types['arguments'] = jdtString then
+          if FnObj.Types['arguments'] = TDextJsonNodeType.jntString then
             TC.ArgsJson := FnObj.S['arguments']
           else
             TC.ArgsJson := '{}';
@@ -274,7 +279,7 @@ begin
 
     Result.StopReason := MapFinishReason(FinishReason);
 
-    if Root.Types['usage'] = jdtObject then
+    if Root.Types['usage'] = TDextJsonNodeType.jntObject then
     begin
       Usage := Root.O['usage'];
       Result.InputTokens  := Usage.I['prompt_tokens'];
@@ -304,7 +309,7 @@ begin
       TRestClient.Create(FEndpoint)
         .Timeout(120000)
         .Header('Authorization', 'Bearer ' + FApiKey)
-        .PostJson(Body.ToJSON)
+        .PostJson(Body.ToJson)
         .Await;
   finally
     Body.Free;

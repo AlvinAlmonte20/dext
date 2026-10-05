@@ -43,6 +43,7 @@ uses
 var
   Builder: IWebHostBuilder;
   Host: IWebHost;
+  App: IWebApplication;
 
 begin
   try
@@ -54,26 +55,26 @@ begin
     Builder := TDextWebHost.CreateDefaultBuilder;
 
     Builder.Configure(
-      procedure(App: IApplicationBuilder)
+      procedure(AppBuilder: IApplicationBuilder)
       begin
-        App.UseMiddleware(TRequestLoggingMiddleware);
+        AppBuilder.UseMiddleware(TRequestLoggingMiddleware);
 
         // GET / - Root info
-        App.MapGet('/',
+        AppBuilder.MapGet('/',
           procedure(Context: IHttpContext)
           begin
             Context.Response.Write('Welcome to Dext Native Server Engine!');
           end);
 
         // GET /health - Health status check
-        App.MapGet('/health',
+        AppBuilder.MapGet('/health',
           procedure(Context: IHttpContext)
           begin
             Context.Response.Json('{"status": "healthy", "engine": "native"}');
           end);
 
         // GET /time - Current time
-        App.MapGet('/time',
+        AppBuilder.MapGet('/time',
           procedure(Context: IHttpContext)
           begin
             Context.Response.Write(Format('Server Time: %s', [DateTimeToStr(Now)]));
@@ -81,13 +82,15 @@ begin
       end);
 
     Host := Builder.Build;
+    App := Host as IWebApplication;
 
     // Configure Dext to use the Native HTTP.sys / epoll server engine
-    (Host as IWebApplication).UseNativeServer;
+    App.UseNativeServer;
 
     // 8080 fica com o Web.SslDemo. http.sys não aceita http://+:8080/ e https://+:8080/ juntos.
-    Host.Run(8090);
-    Host.Stop;
+    // Run(Port) exists on IWebApplication, not on IWebHost.
+    App.Run(8090);
+    App.Stop;
 
   except
     on E: Exception do

@@ -56,6 +56,7 @@ uses
   Dext.Collections,
   Dext.Collections.Dict,
   Dext.Core.Reflection,
+  Dext.Json.Types,
   Dext.AI.MCP.Types,
   Dext.AI.MCP.Attributes;
 
@@ -205,7 +206,9 @@ begin
     try
       InvokeResult := AMethod.Invoke(AProvider,
         [TValue.From<TJsonObject>(Args)]);
-      Result := InvokeResult.AsType<TMCPPromptResult>;
+      if InvokeResult.IsEmpty or (InvokeResult.Kind <> tkRecord) then
+        raise Exception.Create('Prompt invoke returned an unexpected RTTI value');
+      InvokeResult.ExtractRawData(@Result);
     except
       on E: Exception do
       begin

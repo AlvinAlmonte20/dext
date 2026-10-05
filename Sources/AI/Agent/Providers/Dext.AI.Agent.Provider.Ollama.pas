@@ -36,7 +36,8 @@ interface
 uses
   System.SysUtils,
   System.Classes,
-  DextJsonDataObjects,
+  Dext.Core.Json.NextGen,
+  Dext.Json.Types,
   Dext.Net.RestClient,
   Dext.AI.Agent.Contracts;
 
@@ -114,11 +115,14 @@ begin
 
       if Length(AMessage.ToolCalls) > 0 then
       begin
-        ToolCallsArr := Result.A['tool_calls'];
+        ToolCallsArr := TJsonArray.Create;
+        Result.A['tool_calls'] := ToolCallsArr;
         for TC in AMessage.ToolCalls do
         begin
-          TCObj := ToolCallsArr.AddObject;
-          FnObj := TCObj.O['function'];
+          TCObj := TJsonObject.Create;
+          ToolCallsArr.Add(TCObj);
+          FnObj := TJsonObject.Create;
+          TCObj.O['function'] := FnObj;
           FnObj.S['name'] := TC.Name;
           FnObj.S['arguments'] := TC.ArgsJson;
         end;
@@ -141,7 +145,8 @@ begin
   Result := TJsonObject.Create;
   Result.S['type'] := 'function';
 
-  FnObj := Result.O['function'];
+  FnObj := TJsonObject.Create;
+  Result.O['function'] := FnObj;
   FnObj.S['name'] := ATool.Name;
   FnObj.S['description'] := ATool.Description;
 
@@ -166,13 +171,15 @@ begin
   Result.S['model'] := FModel;
   Result.B['stream'] := False;
 
-  MsgsArr := Result.A['messages'];
+  MsgsArr := TJsonArray.Create;
+  Result.A['messages'] := MsgsArr;
   for Msg in AMessages do
     MsgsArr.Add(BuildMessageJSON(Msg));
 
   if Length(ATools) > 0 then
   begin
-    ToolsArr := Result.A['tools'];
+    ToolsArr := TJsonArray.Create;
+    Result.A['tools'] := ToolsArr;
     for Tool in ATools do
       ToolsArr.Add(BuildToolJSON(Tool));
   end;
@@ -212,19 +219,19 @@ begin
   end;
   Root := TJsonObject(Parsed);
   try
-    if (Root.Types['message'] <> jdtObject) or (Root.O['message'] = nil) then
+    if (Root.Types['message'] <> TDextJsonNodeType.jntObject) or (Root.O['message'] = nil) then
       raise ELLMProviderError.CreateFmt('Ollama: resposta sem message: %s', [ABody]);
     Message := Root.O['message'];
 
     // "content" pode vir null em vez de "" — mesmo cuidado do provider
-    // OpenAI: o parser representa null como jdtObject(nil), e ler isso via
-    // S[] lançaria EJsonCastException.
-    if Message.Types['content'] = jdtString then
+    // OpenAI: NextGen representa null como jntNull, e ler isso via S[]
+    // lançaria cast exception.
+    if Message.Types['content'] = TDextJsonNodeType.jntString then
       Result.Content := Message.S['content']
     else
       Result.Content := '';
 
-    if Message.Types['tool_calls'] = jdtArray then
+    if Message.Types['tool_calls'] = TDextJsonNodeType.jntArray then
     begin
       ToolCallsArr := Message.A['tool_calls'];
       SetLength(ToolCalls, ToolCallsArr.Count);
@@ -235,15 +242,15 @@ begin
         TC.Id := 'ollama-call-' + IntToStr(I);
         TC.ArgsJson := '{}';
 
-        if TCObj.Types['function'] = jdtObject then
+        if TCObj.Types['function'] = TDextJsonNodeType.jntObject then
         begin
           FnObj := TCObj.O['function'];
           TC.Name := FnObj.S['name'];
           // Ollama devolve "arguments" como objeto JSON de verdade (não como
           // string escapada, ao contrário da OpenAI) — serializa de volta
           // para string para caber em TLLMToolCall.ArgsJson.
-          if FnObj.Types['arguments'] = jdtObject then
-            TC.ArgsJson := FnObj.O['arguments'].ToJSON;
+          if FnObj.Types['arguments'] = TDextJsonNodeType.jntObject then
+            TC.ArgsJson := FnObj.O['arguments'].ToJson;
         end;
 
         ToolCalls[I] := TC;
@@ -275,7 +282,7 @@ begin
     Response :=
       TRestClient.Create(FBaseUrl)
         .Timeout(120000)
-        .PostJson('/api/chat', Body.ToJSON)
+        .PostJson('/api/chat', Body.ToJson)
         .Await;
   finally
     Body.Free;

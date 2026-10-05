@@ -23,10 +23,9 @@
 {                                                                           }
 {  Dispatch is pure string-in/string-out with no HTTP dependency, so it     }
 {  can be exercised directly. These tests exist specifically to catch a     }
-{  regression in the System.JSON -> DextJsonDataObjects migration of the    }
-{  JSON-RPC "id" field (string | number | null), since DextJsonDataObjects  }
-{  has no loose polymorphic value type - TJsonRpc represents "id" as a      }
-{  standalone TJsonDataValueHelper instead.                                 }
+{  regression in the JSON-RPC "id" field (string | number | null) after the  }
+{  migration to NextGen — TJsonRpc represents "id" via SetNull / typed       }
+{  getters instead of a loose polymorphic value type.                        }
 {                                                                           }
 {***************************************************************************}
 unit TestMCP.Server;

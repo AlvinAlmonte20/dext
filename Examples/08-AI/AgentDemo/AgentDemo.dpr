@@ -6,7 +6,8 @@ uses
   Winapi.Windows,
   System.SysUtils,
   System.Math,
-  DextJsonDataObjects,
+  Dext.Core.Json.NextGen,
+  Dext.Json.Types,
   System.IOUtils,
   System.Classes,
   Dext.AI.MCP.Tools,
@@ -61,7 +62,8 @@ begin
       repeat
         if (SR.Attr and faDirectory) = 0 then
         begin
-          JO := JA.AddObject;
+          JO := TJsonObject.Create;
+          JA.Add(JO);
           JO.S['name'] := SR.Name;
           JO.L['size'] := SR.Size;
         end;
@@ -71,7 +73,7 @@ begin
     end;
     Result := TMCPToolResult.Text(
       Format('{"path":"%s","filter":"%s","count":%d,"files":%s}',
-        [Path, Ext, JA.Count, JA.ToJSON])
+        [Path, Ext, JA.Count, JA.ToJson])
     );
   finally
     JA.Free;

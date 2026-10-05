@@ -311,8 +311,9 @@ implementation
 
 {$IFDEF MSWINDOWS}
 const
-  WSAID_ACCEPTEX: TGUID = '{b5367d37-239b-11d1-871c-0020afd6127f}';
-  WSAID_GETACCEPTEXSOCKADDRS: TGUID = '{b5367d38-239b-11d1-871c-0020afd6127f}';
+  // MSDN WSAID_ACCEPTEX / WSAID_GETACCEPTEXSOCKADDRS (mswsock.h)
+  WSAID_ACCEPTEX: TGUID = '{b5367df1-cbac-11cf-95ca-00805f48a192}';
+  WSAID_GETACCEPTEXSOCKADDRS: TGUID = '{b5367df2-cbac-11cf-95ca-00805f48a192}';
   SIO_GET_EXTENSION_FUNCTION_POINTER = $C8000006;
 
 { TDextIocpConnection }
@@ -984,15 +985,21 @@ begin
   if Socket = INVALID_SOCKET then
     raise EOSError.Create('Failed to create temporary socket');
 
-  GuidAcceptEx := WSAID_ACCEPTEX;
-  WSAIoctl(Socket, SIO_GET_EXTENSION_FUNCTION_POINTER, @GuidAcceptEx, SizeOf(GuidAcceptEx),
-    @FAcceptEx, SizeOf(Pointer), Bytes, nil, nil);
+  try
+    GuidAcceptEx := WSAID_ACCEPTEX;
+    if WSAIoctl(Socket, SIO_GET_EXTENSION_FUNCTION_POINTER, @GuidAcceptEx,
+      SizeOf(GuidAcceptEx), @FAcceptEx, SizeOf(Pointer), Bytes, nil, nil) <> 0 then
+      raise EOSError.Create('WSAIoctl(WSAID_ACCEPTEX) failed with error code: ' +
+        IntToStr(WSAGetLastError));
 
-  GuidGetSockAddrs := WSAID_GETACCEPTEXSOCKADDRS;
-  WSAIoctl(Socket, SIO_GET_EXTENSION_FUNCTION_POINTER, @GuidGetSockAddrs, SizeOf(GuidGetSockAddrs),
-    @FGetAcceptExSockaddrs, SizeOf(Pointer), Bytes, nil, nil);
-
-  closesocket(Socket);
+    GuidGetSockAddrs := WSAID_GETACCEPTEXSOCKADDRS;
+    if WSAIoctl(Socket, SIO_GET_EXTENSION_FUNCTION_POINTER, @GuidGetSockAddrs,
+      SizeOf(GuidGetSockAddrs), @FGetAcceptExSockaddrs, SizeOf(Pointer), Bytes, nil, nil) <> 0 then
+      raise EOSError.Create('WSAIoctl(WSAID_GETACCEPTEXSOCKADDRS) failed with error code: ' +
+        IntToStr(WSAGetLastError));
+  finally
+    closesocket(Socket);
+  end;
 
   if not Assigned(FAcceptEx) or not Assigned(FGetAcceptExSockaddrs) then
     raise EOSError.Create('Failed to load AcceptEx extension function pointers');

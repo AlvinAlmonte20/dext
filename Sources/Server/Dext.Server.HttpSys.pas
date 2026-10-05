@@ -2873,7 +2873,32 @@ end;
 procedure TDextHttpSysEngine.ConfigureLimits;
 var
   Binding: HTTP_BINDING_INFO;
+  QueueLength: ULONG;
+  ConnLimit: HTTP_CONNECTION_LIMIT_INFO;
+  Bandwidth: HTTP_BANDWIDTH_LIMIT_INFO;
   Ret: ULONG;
+
+  procedure SetQosProperty(var Info: HTTP_QOS_SETTING_INFO; AQosType: HTTP_QOS_SETTING_TYPE;
+    AInfoLen: ULONG; AAlsoForSession: Boolean);
+  begin
+    Info.QosType := AQosType;
+    // QosSetting points at Flags/Max* immediately after the HTTP_QOS_SETTING_INFO header.
+    Info.QosSetting := Pointer(PByte(@Info) + SizeOf(HTTP_QOS_SETTING_INFO));
+    if AAlsoForSession then
+    begin
+      Ret := HttpSetServerSessionProperty(
+        FServerSessionId, HttpServerQosProperty, @Info, AInfoLen);
+      if Ret <> ERROR_SUCCESS then
+        raise EOSError.Create('HttpSetServerSessionProperty (QoS) failed with error code: ' +
+          IntToStr(Ret));
+    end;
+    Ret := HttpSetUrlGroupProperty(
+      FUrlGroupId, HttpServerQosProperty, @Info, AInfoLen);
+    if Ret <> ERROR_SUCCESS then
+      raise EOSError.Create('HttpSetUrlGroupProperty (QoS) failed with error code: ' +
+        IntToStr(Ret));
+  end;
+
 begin
   Binding.Flags := 1;
   Binding.RequestQueueHandle := FReqQueue;
@@ -2887,11 +2912,87 @@ begin
 
   if Ret <> ERROR_SUCCESS then
     raise EOSError.Create('HttpSetUrlGroupProperty (Binding) failed with error code: ' + IntToStr(Ret));
+
+  if FOptions.QueueLength > 0 then
+  begin
+    QueueLength := ULONG(FOptions.QueueLength);
+    Ret := HttpSetRequestQueueProperty(
+      FReqQueue,
+      HttpServerQueueLengthProperty,
+      @QueueLength,
+      SizeOf(QueueLength),
+      0,
+      nil
+    );
+    if Ret <> ERROR_SUCCESS then
+      raise EOSError.Create('HttpSetRequestQueueProperty (QueueLength) failed with error code: ' +
+        IntToStr(Ret));
+  end;
+
+  if FOptions.MaxConnections > 0 then
+  begin
+    FillChar(ConnLimit, SizeOf(ConnLimit), 0);
+    ConnLimit.Flags := 1;
+    ConnLimit.MaxConnections := ULONG(FOptions.MaxConnections);
+    SetQosProperty(ConnLimit.Info, HttpQosSettingTypeConnectionLimit,
+      SizeOf(ConnLimit), False);
+  end;
+
+  if FOptions.MaxBandwidth > 0 then
+  begin
+    FillChar(Bandwidth, SizeOf(Bandwidth), 0);
+    Bandwidth.Flags := 1;
+    if FOptions.MaxBandwidth < Integer(HTTP_MIN_ALLOWED_BANDWIDTH_THROTTLING_RATE) then
+      Bandwidth.MaxBandwidth := HTTP_MIN_ALLOWED_BANDWIDTH_THROTTLING_RATE
+    else
+      Bandwidth.MaxBandwidth := ULONG(FOptions.MaxBandwidth);
+    SetQosProperty(Bandwidth.Info, HttpQosSettingTypeBandwidth,
+      SizeOf(Bandwidth), True);
+  end;
 end;
 
 procedure TDextHttpSysEngine.ConfigureTimeouts;
+var
+  Timeout: HTTP_TIMEOUT_LIMIT_INFO;
+  Ret: ULONG;
+
+  function ClampTimeoutSec(AValue: Integer): USHORT;
+  begin
+    if AValue <= 0 then
+      Result := 0
+    else if AValue > High(USHORT) then
+      Result := High(USHORT)
+    else
+      Result := USHORT(AValue);
+  end;
+
 begin
-  // Set configuration timeouts if specified in Options
+  FillChar(Timeout, SizeOf(Timeout), 0);
+  Timeout.Flags := 1;
+  Timeout.EntityBody := ClampTimeoutSec(FOptions.EntityBodyTimeoutSec);
+  Timeout.DrainEntityBody := ClampTimeoutSec(FOptions.DrainEntityBodyTimeoutSec);
+  Timeout.RequestQueue := ClampTimeoutSec(FOptions.RequestQueueTimeoutSec);
+  Timeout.HeaderWait := ClampTimeoutSec(FOptions.HeaderWaitTimeoutSec);
+  if FOptions.KeepAlive then
+    Timeout.IdleConnection := ClampTimeoutSec(FOptions.KeepAliveTimeoutSec);
+  if FOptions.MinSendRate > 0 then
+    Timeout.MinSendRate := ULONG(FOptions.MinSendRate);
+
+  // Skip the round-trip when every field is left at the system default.
+  if (Timeout.EntityBody = 0) and (Timeout.DrainEntityBody = 0) and
+     (Timeout.RequestQueue = 0) and (Timeout.IdleConnection = 0) and
+     (Timeout.HeaderWait = 0) and (Timeout.MinSendRate = 0) then
+    Exit;
+
+  Ret := HttpSetUrlGroupProperty(
+    FUrlGroupId,
+    HttpServerTimeoutsProperty,
+    @Timeout,
+    SizeOf(Timeout)
+  );
+  if Ret <> ERROR_SUCCESS then
+    raise EOSError.Create('HttpSetUrlGroupProperty (Timeouts) failed with error code: ' +
+      IntToStr(Ret));
 end;
 
 procedure TDextHttpSysEngine.RegisterSslBinding;

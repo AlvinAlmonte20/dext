@@ -192,7 +192,9 @@ begin
   begin
     try
       InvokeResult := AMethod.Invoke(AProvider, [TValue.From<string>(AUri)]);
-      Result := InvokeResult.AsType<TMCPResourceContents>;
+      if InvokeResult.IsEmpty or (InvokeResult.Kind <> tkRecord) then
+        raise Exception.Create('Resource invoke returned an unexpected RTTI value');
+      InvokeResult.ExtractRawData(@Result);
     except
       on E: Exception do
         Result := TMCPResourceContents.TextResource(AUri,

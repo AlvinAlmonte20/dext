@@ -34,7 +34,8 @@ interface
 
 uses
   System.SysUtils,
-  DextJsonDataObjects,
+  Dext.Core.Json.NextGen,
+  Dext.Json.Types,
   Dext.Collections.Dict,
   Dext.AI.Agent.Contracts;
 
@@ -134,13 +135,15 @@ begin
   Result.S['role'] := RoleToName(AMsg.Role);
   Result.S['content'] := AMsg.Content;
   Result.S['toolCallId'] := AMsg.ToolCallId;
-  JCalls := Result.A['toolCalls'];
+  JCalls := TJsonArray.Create;
+  Result.A['toolCalls'] := JCalls;
   for TC in AMsg.ToolCalls do
   begin
-    JCall := JCalls.AddObject;
+    JCall := TJsonObject.Create;
     JCall.S['id'] := TC.Id;
     JCall.S['name'] := TC.Name;
     JCall.S['argsJson'] := TC.ArgsJson;
+    JCalls.Add(JCall);
   end;
 end;
 
@@ -159,7 +162,7 @@ begin
   Result.Role       := NameToRole(AObj.S['role']);
   Result.Content    := AObj.S['content'];
   Result.ToolCallId := AObj.S['toolCallId'];
-  if AObj.Types['toolCalls'] <> jdtArray then
+  if AObj.Types['toolCalls'] <> TDextJsonNodeType.jntArray then
     Exit;
   JCalls := AObj.A['toolCalls'];
   SetLength(Calls, JCalls.Count);
@@ -371,20 +374,23 @@ begin
     Root.B['isDone'] := FIsDone;
     Root.S['finalAnswer'] := FFinalAnswer;
 
-    JMsgs := Root.A['messages'];
+    JMsgs := TJsonArray.Create;
+    Root.A['messages'] := JMsgs;
     for Msg in FMessages do
       JMsgs.Add(MessageToJson(Msg));
 
-    JCalls := Root.A['pendingCalls'];
+    JCalls := TJsonArray.Create;
+    Root.A['pendingCalls'] := JCalls;
     for TC in FPendingCalls do
       JCalls.Add(ToolCallToJson(TC));
 
-    JMeta := Root.O['metadata'];
+    JMeta := TJsonObject.Create;
+    Root.O['metadata'] := JMeta;
     if FMetadata <> nil then
       for Pair in FMetadata do
         JMeta.S[Pair.Key] := Pair.Value;
 
-    Result := Root.ToJSON;
+    Result := Root.ToJson;
   finally
     Root.Free;
   end;
@@ -413,7 +419,7 @@ begin
   end;
   Root := TJsonObject(Parsed);
   try
-    if Root.Types['messages'] = jdtArray then
+    if Root.Types['messages'] = TDextJsonNodeType.jntArray then
     begin
       JMsgs := Root.A['messages'];
       SetLength(Msgs, JMsgs.Count);
@@ -421,7 +427,7 @@ begin
         Msgs[I] := JsonToMessage(JMsgs.O[I]);
     end;
 
-    if Root.Types['pendingCalls'] = jdtArray then
+    if Root.Types['pendingCalls'] = TDextJsonNodeType.jntArray then
     begin
       JCalls := Root.A['pendingCalls'];
       SetLength(Calls, JCalls.Count);
@@ -430,12 +436,12 @@ begin
     end;
 
     Meta := TDictionary<string, string>.Create;
-    if Root.Types['metadata'] = jdtObject then
+    if Root.Types['metadata'] = TDextJsonNodeType.jntObject then
     begin
       JMeta := Root.O['metadata'];
       if JMeta <> nil then
         for I := 0 to JMeta.Count - 1 do
-          Meta.AddOrSetValue(JMeta.Names[I], JMeta.Items[I].Value);
+          Meta.AddOrSetValue(JMeta.Names[I], JMeta.S[JMeta.Names[I]]);
     end;
 
     Result := TAgentState.CreateInternal(
