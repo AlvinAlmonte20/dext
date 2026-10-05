@@ -33,6 +33,7 @@ uses
   Dext.Entity.Validation.Tests in 'Dext.Entity.Validation.Tests.pas',
   Dext.Entity.BulkBatchSize.Tests in 'Dext.Entity.BulkBatchSize.Tests.pas',
   Dext.Entity.DynamicQueryFilter.Tests in 'Dext.Entity.DynamicQueryFilter.Tests.pas',
+  Dext.Entity.LikeLiteral.Tests in 'Dext.Entity.LikeLiteral.Tests.pas',
   Dext.Entity.Sequences.Tests in 'Dext.Entity.Sequences.Tests.pas',
   Dext.Entity.SaveChanges.Tests in 'Dext.Entity.SaveChanges.Tests.pas',
   Dext.Grpc.Tests in 'Dext.Grpc.Tests.pas';
@@ -80,6 +81,9 @@ begin
         TFluentQueryTests,
         TDynamicQueryFilterUnitTests,
         TDynamicQueryFilterIntegrationTests,
+        TLikeLiteralSqlTests,
+        TLikeLiteralMemoryTests,
+        TLikeLiteralDbTests,
         TEntitySequencesTests,
         TSaveChangesTests,
         TGrpcTests

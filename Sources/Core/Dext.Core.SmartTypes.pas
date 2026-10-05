@@ -1205,23 +1205,36 @@ begin
   else
   begin
     StrVal := TValue.From<T>(FValue).ToString;
-    Result := BooleanExpression.FromRuntime(StrVal.Contains(Pattern.Replace('%', '')));
+    // Real % and _ matching, as the database does.
+    Result := BooleanExpression.FromRuntime(LikeMatches(StrVal, Pattern, False));
   end;
 end;
 
 function Prop<T>.StartsWith(const Value: string): BooleanExpression;
 begin
-  Result := Like(Value + '%');
+  if IsQueryMode then
+    Result := BooleanExpression.FromQuery(
+      TPropExpressionBuilder.CompareExprProp(GetColumnName, boStartsWith, TValue.From<string>(Value)))
+  else
+    Result := BooleanExpression.FromRuntime(TValue.From<T>(FValue).ToString.StartsWith(Value));
 end;
 
 function Prop<T>.EndsWith(const Value: string): BooleanExpression;
 begin
-  Result := Like('%' + Value);
+  if IsQueryMode then
+    Result := BooleanExpression.FromQuery(
+      TPropExpressionBuilder.CompareExprProp(GetColumnName, boEndsWith, TValue.From<string>(Value)))
+  else
+    Result := BooleanExpression.FromRuntime(TValue.From<T>(FValue).ToString.EndsWith(Value));
 end;
 
 function Prop<T>.Contains(const Value: string): BooleanExpression;
 begin
-  Result := Like('%' + Value + '%');
+  if IsQueryMode then
+    Result := BooleanExpression.FromQuery(
+      TPropExpressionBuilder.CompareExprProp(GetColumnName, boContains, TValue.From<string>(Value)))
+  else
+    Result := BooleanExpression.FromRuntime(TValue.From<T>(FValue).ToString.Contains(Value));
 end;
 
 function Prop<T>.&In(const Values: TArray<T>): BooleanExpression;

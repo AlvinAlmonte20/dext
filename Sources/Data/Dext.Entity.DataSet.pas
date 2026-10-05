@@ -1626,6 +1626,7 @@ var
   Un: TUnaryExpression;
   Val: TValue;
   OpStr: string;
+  Pattern: string;
 begin
   Result := '';
   if AExpression = nil then
@@ -1647,6 +1648,22 @@ begin
     else
       // Garante o uso do ponto como separador decimal para compatibilidade com o parser de filtros do TDataSet
       Result := Val.ToString.Replace(',', '.');
+  end
+  else if (Obj is TBinaryExpression) and
+    (TBinaryExpression(Obj).BinaryOperator in [boStartsWith, boEndsWith, boContains]) and
+    (TBinaryExpression(Obj).Right is TLiteralExpression) then
+  begin
+    // The same LIKE text as before these operators existed. TDataSet filters
+    // have no ESCAPE clause, so a % or _ in the value stays a wildcard here.
+    Bin := TBinaryExpression(Obj);
+    Pattern := TLiteralExpression(Bin.Right).Value.ToString;
+    case Bin.BinaryOperator of
+      boStartsWith: Pattern := Pattern + '%';
+      boEndsWith: Pattern := '%' + Pattern;
+    else
+      Pattern := '%' + Pattern + '%';
+    end;
+    Result := Format('(%s LIKE %s)', [TranslateExpressionToFilterText(Bin.Left), QuotedStr(Pattern)]);
   end
   else if Obj is TBinaryExpression then
   begin

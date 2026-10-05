@@ -532,6 +532,9 @@ const
   boBitwiseAnd = Dext.Specifications.Types.boBitwiseAnd;
   boBitwiseOr = Dext.Specifications.Types.boBitwiseOr;
   boBitwiseXor = Dext.Specifications.Types.boBitwiseXor;
+  boStartsWith = Dext.Specifications.Types.boStartsWith;
+  boEndsWith = Dext.Specifications.Types.boEndsWith;
+  boContains = Dext.Specifications.Types.boContains;
   aoAdd = Dext.Specifications.Types.aoAdd;
   aoSubtract = Dext.Specifications.Types.aoSubtract;
   aoMultiply = Dext.Specifications.Types.aoMultiply;
