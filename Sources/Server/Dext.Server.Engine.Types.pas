@@ -59,6 +59,36 @@ type
     MaxQueueCapacity: Integer;
     /// <summary>Outstanding Http.Sys receives per I/O worker (default: 2).</summary>
     OutstandingReceiveDepth: Integer;
+    /// <summary>
+    ///   Http.sys request-queue length (HttpServerQueueLengthProperty).
+    ///   0 leaves the kernel default (typically 1000).
+    /// </summary>
+    QueueLength: Integer;
+    /// <summary>
+    ///   Http.sys max bandwidth in bytes/sec (HttpServerQosProperty).
+    ///   0 means unlimited / not configured.
+    /// </summary>
+    MaxBandwidth: Integer;
+    /// <summary>
+    ///   Http.sys EntityBody timeout in seconds. 0 leaves the system default.
+    /// </summary>
+    EntityBodyTimeoutSec: Integer;
+    /// <summary>
+    ///   Http.sys HeaderWait timeout in seconds. 0 leaves the system default.
+    /// </summary>
+    HeaderWaitTimeoutSec: Integer;
+    /// <summary>
+    ///   Http.sys RequestQueue timeout in seconds. 0 leaves the system default.
+    /// </summary>
+    RequestQueueTimeoutSec: Integer;
+    /// <summary>
+    ///   Http.sys DrainEntityBody timeout in seconds. 0 leaves the system default.
+    /// </summary>
+    DrainEntityBodyTimeoutSec: Integer;
+    /// <summary>
+    ///   Http.sys MinSendRate in bytes/sec. 0 leaves the system default.
+    /// </summary>
+    MinSendRate: Integer;
     /// <summary>Maximum accepted native request-header buffer size.</summary>
     MaxRequestHeaderSize: Integer;
     /// <summary>Maximum accepted request body size.</summary>
@@ -128,6 +158,15 @@ type
     /// <summary>Configures outstanding Http.Sys receives per worker (1..8).</summary>
     function WithOutstandingReceiveDepth(
       ADepth: Integer): TServerEngineOptions;
+    /// <summary>Configures the http.sys request-queue length (0 = kernel default).</summary>
+    function WithQueueLength(ALength: Integer): TServerEngineOptions;
+    /// <summary>Configures the http.sys max bandwidth in bytes/sec (0 = unlimited).</summary>
+    function WithMaxBandwidth(ABytesPerSec: Integer): TServerEngineOptions;
+    /// <summary>Configures http.sys kernel timeouts (seconds; 0 = system default).</summary>
+    function WithHttpSysTimeouts(AEntityBodySec: Integer = 0;
+      AHeaderWaitSec: Integer = 0; ARequestQueueSec: Integer = 0;
+      ADrainEntityBodySec: Integer = 0;
+      AMinSendRate: Integer = 0): TServerEngineOptions;
     /// <summary>Configures native request header and body size limits.</summary>
     function WithRequestSizeLimits(AHeaderBytes: Integer;
       ABodyBytes: Int64): TServerEngineOptions;
@@ -166,6 +205,13 @@ begin
   Result.MaxExecutorThreads := 0;
   Result.MaxQueueCapacity := 1024;
   Result.OutstandingReceiveDepth := 2;
+  Result.QueueLength := 0;
+  Result.MaxBandwidth := 0;
+  Result.EntityBodyTimeoutSec := 0;
+  Result.HeaderWaitTimeoutSec := 0;
+  Result.RequestQueueTimeoutSec := 0;
+  Result.DrainEntityBodyTimeoutSec := 0;
+  Result.MinSendRate := 0;
   Result.MaxRequestHeaderSize := 64 * 1024;
   Result.MaxRequestBodySize := 16 * 1024 * 1024;
   Result.UseHttps := False;
@@ -261,6 +307,32 @@ begin
   else if ADepth > 8 then
     ADepth := 8;
   Self.OutstandingReceiveDepth := ADepth;
+  Result := Self;
+end;
+
+function TServerEngineOptionsHelper.WithQueueLength(
+  ALength: Integer): TServerEngineOptions;
+begin
+  Self.QueueLength := ALength;
+  Result := Self;
+end;
+
+function TServerEngineOptionsHelper.WithMaxBandwidth(
+  ABytesPerSec: Integer): TServerEngineOptions;
+begin
+  Self.MaxBandwidth := ABytesPerSec;
+  Result := Self;
+end;
+
+function TServerEngineOptionsHelper.WithHttpSysTimeouts(
+  AEntityBodySec, AHeaderWaitSec, ARequestQueueSec, ADrainEntityBodySec,
+  AMinSendRate: Integer): TServerEngineOptions;
+begin
+  Self.EntityBodyTimeoutSec := AEntityBodySec;
+  Self.HeaderWaitTimeoutSec := AHeaderWaitSec;
+  Self.RequestQueueTimeoutSec := ARequestQueueSec;
+  Self.DrainEntityBodyTimeoutSec := ADrainEntityBodySec;
+  Self.MinSendRate := AMinSendRate;
   Result := Self;
 end;
 

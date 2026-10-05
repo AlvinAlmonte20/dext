@@ -423,6 +423,24 @@ type
   end;
   PHTTP_CONNECTION_LIMIT_INFO = ^HTTP_CONNECTION_LIMIT_INFO;
 
+  HTTP_BANDWIDTH_LIMIT_INFO = record
+    Info: HTTP_QOS_SETTING_INFO;
+    Flags: HTTP_PROPERTY_FLAGS;
+    MaxBandwidth: ULONG;
+  end;
+  PHTTP_BANDWIDTH_LIMIT_INFO = ^HTTP_BANDWIDTH_LIMIT_INFO;
+
+  HTTP_TIMEOUT_LIMIT_INFO = record
+    Flags: HTTP_PROPERTY_FLAGS;
+    EntityBody: USHORT;
+    DrainEntityBody: USHORT;
+    RequestQueue: USHORT;
+    IdleConnection: USHORT;
+    HeaderWait: USHORT;
+    MinSendRate: ULONG;
+  end;
+  PHTTP_TIMEOUT_LIMIT_INFO = ^HTTP_TIMEOUT_LIMIT_INFO;
+
   HTTP_BINDING_INFO = record
     Flags: HTTP_PROPERTY_FLAGS;
     RequestQueueHandle: THandle;
@@ -432,6 +450,9 @@ type
 const
   HTTPAPI_VERSION_1: HTTPAPI_VERSION = (HttpApiMajorVersion: 1; HttpApiMinorVersion: 0);
   HTTPAPI_VERSION_2: HTTPAPI_VERSION = (HttpApiMajorVersion: 2; HttpApiMinorVersion: 0);
+
+  HTTP_MIN_ALLOWED_BANDWIDTH_THROTTLING_RATE = 1024;
+  HTTP_LIMIT_INFINITE = ULONG(-1);
 
 // Windows API functions imported from httpapi.dll
 function HttpInitialize(Version: HTTPAPI_VERSION; Flags: ULONG; pReserved: Pointer): ULONG; stdcall; external HTTPAPI_DLL;
@@ -550,6 +571,8 @@ function HttpQueryServiceConfiguration(ServiceHandle: THandle; ConfigId: DWORD;
   pOutputConfigInfo: Pointer; OutputConfigInfoLength: ULONG;
   var pReturnLength: ULONG; pOverlapped: Pointer): ULONG; stdcall; external HTTPAPI_DLL;
 function HttpSetUrlGroupProperty(UrlGroupId: HTTP_URL_GROUP_ID; PropertyId: HTTP_SERVER_PROPERTY; pPropertyInformation: Pointer; PropertyInformationLength: ULONG): ULONG; stdcall; external HTTPAPI_DLL;
+function HttpSetServerSessionProperty(ServerSessionId: HTTP_SERVER_SESSION_ID; PropertyId: HTTP_SERVER_PROPERTY; pPropertyInformation: Pointer; PropertyInformationLength: ULONG): ULONG; stdcall; external HTTPAPI_DLL;
+function HttpSetRequestQueueProperty(Handle: THandle; PropertyId: HTTP_SERVER_PROPERTY; pPropertyInformation: Pointer; PropertyInformationLength: ULONG; Reserved: ULONG; pReserved: Pointer): ULONG; stdcall; external HTTPAPI_DLL;
 
 // Not declared by Winapi.Winsock2 (which only has the ANSI inet_ntop).
 // Available since Windows Vista.
