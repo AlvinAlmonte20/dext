@@ -1,4 +1,4 @@
-{***************************************************************************}
+﻿{***************************************************************************}
 {                                                                           }
 {           Dext Framework                                                  }
 {                                                                           }
@@ -33,7 +33,9 @@ interface
 uses
   System.SysUtils,
   System.IOUtils,
-  DextJsonDataObjects,
+  // Must be NextGen (same TJsonObject as TMCPToolRegistry) — otherwise RTTI
+  // Invoke raises "Invalid class typecast".
+  Dext.Core.Json.NextGen,
   Dext.Testing,
   Dext.AI.Agent.Contracts,
   Dext.AI.Agent.Runner,
@@ -758,7 +760,9 @@ begin
 
     State := TAgentState.Create('thread-tools-1');
     try
-      Old := State; State := State.WithPendingCalls([TC]); Old.Free;
+      Old := State; State :=
+      State.WithPendingCalls([TC]);
+      Old.Free;
 
       Ctx := Default(TNodeContext);
       Result := Node.Execute(State, Ctx);

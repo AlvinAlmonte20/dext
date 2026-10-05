@@ -42,7 +42,8 @@ interface
 uses
   System.SysUtils,
   System.Classes,
-  DextJsonDataObjects,
+  Dext.Core.Json.NextGen,
+  Dext.Json.Types,
   Dext.Collections,
   Dext.Net.RestClient,
   Dext.AI.Agent.Contracts;
@@ -131,7 +132,8 @@ begin
   Result.S['model'] := FModel;
   Result.I['max_tokens'] := FMaxTokens;
 
-  MsgsArr := Result.A['messages'];
+  MsgsArr := TJsonArray.Create;
+  Result.A['messages'] := MsgsArr;
 
   I := 0;
   while I < Length(AMessages) do
@@ -147,7 +149,8 @@ begin
 
       lrUser:
       begin
-        MsgObj := MsgsArr.AddObject;
+        MsgObj := TJsonObject.Create;
+        MsgsArr.Add(MsgObj);
         MsgObj.S['role'] := 'user';
         MsgObj.S['content'] := Msg.Content;
         Inc(I);
@@ -155,20 +158,24 @@ begin
 
       lrAssistant:
       begin
-        MsgObj := MsgsArr.AddObject;
+        MsgObj := TJsonObject.Create;
+        MsgsArr.Add(MsgObj);
         MsgObj.S['role'] := 'assistant';
-        ContentArr := MsgObj.A['content'];
+        ContentArr := TJsonArray.Create;
+        MsgObj.A['content'] := ContentArr;
 
         if Msg.Content <> '' then
         begin
-          ContentBlock := ContentArr.AddObject;
+          ContentBlock := TJsonObject.Create;
+          ContentArr.Add(ContentBlock);
           ContentBlock.S['type'] := 'text';
           ContentBlock.S['text'] := Msg.Content;
         end;
 
         for TC in Msg.ToolCalls do
         begin
-          ContentBlock := ContentArr.AddObject;
+          ContentBlock := TJsonObject.Create;
+          ContentArr.Add(ContentBlock);
           ContentBlock.S['type'] := 'tool_use';
           ContentBlock.S['id'] := TC.Id;
           ContentBlock.S['name'] := TC.Name;
@@ -190,14 +197,17 @@ begin
       begin
         // Coalesce this run of consecutive tool-result messages into a
         // single {"role":"user","content":[tool_result, tool_result, ...]}
-        MsgObj := MsgsArr.AddObject;
+        MsgObj := TJsonObject.Create;
+        MsgsArr.Add(MsgObj);
         MsgObj.S['role'] := 'user';
-        ContentArr := MsgObj.A['content'];
+        ContentArr := TJsonArray.Create;
+        MsgObj.A['content'] := ContentArr;
 
         J := I;
         while (J < Length(AMessages)) and (AMessages[J].Role = lrToolResult) do
         begin
-          ContentBlock := ContentArr.AddObject;
+          ContentBlock := TJsonObject.Create;
+          ContentArr.Add(ContentBlock);
           ContentBlock.S['type'] := 'tool_result';
           ContentBlock.S['tool_use_id'] := AMessages[J].ToolCallId;
           ContentBlock.S['content'] := AMessages[J].Content;
@@ -213,7 +223,8 @@ begin
 
   if Length(ATools) > 0 then
   begin
-    ToolsArr := Result.A['tools'];
+    ToolsArr := TJsonArray.Create;
+    Result.A['tools'] := ToolsArr;
     for Tool in ATools do
       ToolsArr.Add(BuildToolJSON(Tool));
   end;
@@ -257,7 +268,7 @@ begin
   end;
   Root := TJsonObject(Parsed);
   try
-    if Root.Types['content'] <> jdtArray then
+    if Root.Types['content'] <> TDextJsonNodeType.jntArray then
       raise ELLMProviderError.CreateFmt('Anthropic: resposta sem content: %s', [ABody]);
     ContentArr := Root.A['content'];
 
@@ -276,8 +287,8 @@ begin
           TC := Default(TLLMToolCall);
           TC.Id   := Block.S['id'];
           TC.Name := Block.S['name'];
-          if Block.Types['input'] = jdtObject then
-            TC.ArgsJson := Block.O['input'].ToJSON
+          if Block.Types['input'] = TDextJsonNodeType.jntObject then
+            TC.ArgsJson := Block.O['input'].ToJson
           else
             TC.ArgsJson := '{}';
           ToolCalls.Add(TC);
@@ -293,7 +304,7 @@ begin
 
     Result.StopReason := MapStopReason(Root.S['stop_reason']);
 
-    if Root.Types['usage'] = jdtObject then
+    if Root.Types['usage'] = TDextJsonNodeType.jntObject then
     begin
       Usage := Root.O['usage'];
       Result.InputTokens  := Usage.I['input_tokens'];
@@ -320,7 +331,7 @@ begin
         .Timeout(120000)
         .Header('x-api-key', FApiKey)
         .Header('anthropic-version', '2023-06-01')
-        .PostJson(Body.ToJSON)
+        .PostJson(Body.ToJson)
         .Await;
   finally
     Body.Free;

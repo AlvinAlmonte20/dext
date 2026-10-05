@@ -61,6 +61,7 @@ uses
   Dext.AI.MCP.Types,
   Dext.AI.MCP.Protocol,
   Dext.AI.MCP.Attributes,
+  Dext.Json.Types,
   Dext.Core.Reflection;
 
 type
@@ -269,7 +270,10 @@ begin
       InvokeResult := AMethod.Invoke(AProvider,
         [TValue.From<TJsonObject>(Args)]);
       AProvider.AfterCall(AName);
-      Result := InvokeResult.AsType<TMCPToolResult>;
+      // TMCPToolResult is a record — AsType raises "Invalid class typecast".
+      if InvokeResult.IsEmpty or (InvokeResult.Kind <> tkRecord) then
+        raise Exception.Create('Tool invoke returned an unexpected RTTI value');
+      InvokeResult.ExtractRawData(@Result);
     except
       on E: Exception do
         Result := TMCPToolResult.Error(E.Message);

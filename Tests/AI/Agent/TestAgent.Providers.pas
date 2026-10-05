@@ -32,7 +32,8 @@ interface
 uses
   System.SysUtils,
   Dext.Testing,
-  DextJsonDataObjects,
+  Dext.Core.Json.NextGen,
+  Dext.Json.Types,
   Dext.AI.Agent.Contracts,
   Dext.AI.Agent.Provider.OpenAI,
   Dext.AI.Agent.Provider.Anthropic,
@@ -141,12 +142,10 @@ begin
       AssistantMsg := MsgsArr.O[0];
 
       // "content" precisa estar presente como null explícito (não ausente) -
-      // a API da OpenAI exige isso quando a resposta é só tool_calls. Como a
-      // chave já existe (RequireItem foi chamado por "O['content'] := nil"),
-      // o getter não recria o objeto - deve devolver nil de verdade.
+      // a API da OpenAI exige isso quando a resposta é só tool_calls.
+      // NextGen representa isso como jntNull via SetNull (não jdtObject/nil).
       Should(AssistantMsg.Contains('content')).BeTrue;
-      Should(Ord(AssistantMsg.Types['content'])).Be(Ord(jdtObject));
-      Should(AssistantMsg.O['content']).BeNil;
+      Should(Ord(AssistantMsg.Types['content'])).Be(Ord(TDextJsonNodeType.jntNull));
     finally
       Body.Free;
     end;
