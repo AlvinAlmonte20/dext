@@ -720,6 +720,7 @@ var
   FieldName: string;
   FieldValue: string;
   SingleParamValue: string;
+  IntValue: Int64;
   SourceProvider: TBindingSourceProvider;
 begin
   // ✅ SUPPORT FOR PRIMITIVES (Single Route Param Inference)
@@ -732,6 +733,14 @@ begin
     begin
       SingleParamValue := RouteParams.GetValueByIndex(0);
       
+      // CastFromString turns a value that is not a number into 0: the handler
+      // would then run with 0 for /items/abc. A route segment that does not
+      // convert is a binding failure.
+      if (AType.Kind in [tkInteger, tkInt64]) and (SingleParamValue <> '') and
+        not TryStrToInt64(TNetEncoding.URL.Decode(SingleParamValue), IntValue) then
+        raise EBindingException.CreateFmt('Error converting route param "%s" to %s: not an integer',
+          [SingleParamValue, AType.Name]);
+
       try
         Result := TReflection.CastFromString(SingleParamValue, AType);
         Exit;
