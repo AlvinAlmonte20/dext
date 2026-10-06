@@ -126,6 +126,7 @@ type
     FIgnoreNullValues: Boolean;
     FServiceProvider: IServiceProvider;
     FSmartRecordMapping: Boolean;
+    FZeroDateAsNull: Boolean;
     Formatting: TJsonFormatting;
     IgnoreDefaultValues: Boolean;
     DateFormat: string;
@@ -145,6 +146,12 @@ type
     function IgnoreNullValues: TJsonSettings;
     function CaseInsensitive: TJsonSettings;
     function SmartRecordMapping(AValue: Boolean = True): TJsonSettings;
+    /// <summary>
+    ///   A TDateTime or TDate that is 0 (1899-12-30, "no date") is written as
+    ///   null instead of "1899-12-30T00:00:00.000" (dropped with
+    ///   IgnoreNullValues). A TTime is left alone: 0 is midnight there.
+    /// </summary>
+    function ZeroDateAsNull(AValue: Boolean = True): TJsonSettings;
     function ISODateFormat: TJsonSettings;
     function UnixTimestamp: TJsonSettings;
     function CustomDateFormat(const Format: string): TJsonSettings;
@@ -193,6 +200,7 @@ begin
   Result.EnumStyle := TEnumStyle.AsNumber;
   Result.FCaseInsensitive := False;
   Result.FSmartRecordMapping := True; // Default is True
+  Result.FZeroDateAsNull := False;
 end;
 
 function TJsonSettings.EnumAsNumber: TJsonSettings;
@@ -242,6 +250,12 @@ function TJsonSettings.SmartRecordMapping(AValue: Boolean): TJsonSettings;
 begin
   Result := Self;
   Result.FSmartRecordMapping := AValue;
+end;
+
+function TJsonSettings.ZeroDateAsNull(AValue: Boolean): TJsonSettings;
+begin
+  Result := Self;
+  Result.FZeroDateAsNull := AValue;
 end;
 
 function TJsonSettings.SnakeCase: TJsonSettings;

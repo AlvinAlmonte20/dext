@@ -82,6 +82,13 @@ type
   JsonIgnoreAttribute = class(DextJsonAttribute);
 
   /// <summary>
+  ///   On a class: only its published properties are serialized. Public
+  ///   properties stay working members that never reach the JSON. Inherited
+  ///   by subclasses.
+  /// </summary>
+  JsonPublishedOnlyAttribute = class(DextJsonAttribute);
+
+  /// <summary>
   ///   Specifies a custom format string for date/time fields.
   /// </summary>
   JsonFormatAttribute = class(DextJsonAttribute)
@@ -899,6 +906,8 @@ var
   TypeField: TDextFieldPlan;
   SmartMeta: TTypeMetadata;
   BackingField: TRttiField;
+  PublishedOnly: Boolean;
+  Base: TRttiType;
 begin
   // Lock-free slot cache lookup
   for I := 0 to 15 do
@@ -941,12 +950,25 @@ begin
   SetLength(Holder.Plan.Items, Length(Props));
   ItemCount := 0;
 
+  // [JsonPublishedOnly] on the class or on an ancestor
+  PublishedOnly := False;
+  Base := RttiType;
+  while (Base <> nil) and not PublishedOnly do
+  begin
+    for Attr in Base.GetAttributes do
+      if Attr is JsonPublishedOnlyAttribute then
+        PublishedOnly := True;
+    Base := Base.BaseType;
+  end;
+
   for I := 0 to High(Props) do
   begin
     Prop := Props[I];
 
     // Skip non-public/published properties
     if (Prop.Visibility <> mvPublic) and (Prop.Visibility <> mvPublished) then
+      Continue;
+    if PublishedOnly and (Prop.Visibility <> mvPublished) then
       Continue;
 
     // Skip TObject/TInterfacedObject internals
@@ -1378,9 +1400,14 @@ var
   Unwrapped: TValue;
   NestedObj: TObject;
   NestedIntf: IInterface;
+  Defaults: Boolean;
 begin
   Result := TDextJson.Provider.CreateObject;
   if Obj = nil then Exit;
+
+  // IgnoreDefaultValues and ZeroDateAsNull: checked only when one is on, so
+  // the default path pays nothing.
+  Defaults := FSettings.IgnoreDefaultValues or FSettings.FZeroDateAsNull;
 
   for I := 0 to Plan.Count - 1 do
   begin
@@ -1388,6 +1415,50 @@ begin
 
     if Item^.UseDirect then
     begin
+      if Defaults then
+        case Item^.DirectKind of
+          nkInt32:
+            if FSettings.IgnoreDefaultValues and
+              (TDextDirectAccess.ReadInt32(Obj, Item^.DirectOffset) = 0) then
+              Continue;
+          nkInt64:
+            if FSettings.IgnoreDefaultValues and
+              (TDextDirectAccess.ReadInt64(Obj, Item^.DirectOffset) = 0) then
+              Continue;
+          nkBoolean:
+            if FSettings.IgnoreDefaultValues and
+              not TDextDirectAccess.ReadBoolean(Obj, Item^.DirectOffset) then
+              Continue;
+          nkSingle:
+            if FSettings.IgnoreDefaultValues and
+              (TDextDirectAccess.ReadSingle(Obj, Item^.DirectOffset) = 0) then
+              Continue;
+          nkCurrency:
+            if FSettings.IgnoreDefaultValues and
+              (TDextDirectAccess.ReadCurrency(Obj, Item^.DirectOffset) = 0) then
+              Continue;
+          nkDouble:
+            if FSettings.IgnoreDefaultValues and
+              (TDextDirectAccess.ReadDouble(Obj, Item^.DirectOffset) = 0) then
+              Continue;
+          nkString:
+            if FSettings.IgnoreDefaultValues and
+              (TDextDirectAccess.ReadString(Obj, Item^.DirectOffset) = '') then
+              Continue;
+          nkDateTime:
+            if TDextDirectAccess.ReadDouble(Obj, Item^.DirectOffset) = 0 then
+            begin
+              if FSettings.IgnoreDefaultValues then
+                Continue;
+              if FSettings.FZeroDateAsNull then
+              begin
+                if not FSettings.FIgnoreNullValues then
+                  Result.SetNull(Item^.JsonName);
+                Continue;
+              end;
+            end;
+        end;
+
       case Item^.DirectKind of
         nkInt32:
           Result.SetInt64(Item^.JsonName, TDextDirectAccess.ReadInt32(Obj, Item^.DirectOffset));
@@ -1473,6 +1544,39 @@ begin
         Result.SetNull(Item^.JsonName);
       Continue;
     end;
+
+    // Default values and the zero date (same rules as ShouldSkipField for
+    // fields; a TTime of 0 is midnight, not "no date").
+    if Defaults then
+      case Item^.Kind of
+        skInteger:
+          if FSettings.IgnoreDefaultValues and (PropValue.AsInt64 = 0) then
+            Continue;
+        skFloat:
+          if FSettings.IgnoreDefaultValues and (PropValue.AsExtended = 0) then
+            Continue;
+        skString:
+          if FSettings.IgnoreDefaultValues and (PropValue.AsString = '') then
+            Continue;
+        skBoolean:
+          if FSettings.IgnoreDefaultValues and not PropValue.AsBoolean then
+            Continue;
+        skEnumAsString, skEnumAsNumber:
+          if FSettings.IgnoreDefaultValues and (PropValue.AsOrdinal = 0) then
+            Continue;
+        skDateTime:
+          if PropValue.AsExtended = 0 then
+          begin
+            if FSettings.IgnoreDefaultValues then
+              Continue;
+            if FSettings.FZeroDateAsNull and (Item^.ValueTypeInfo <> TypeInfo(TTime)) then
+            begin
+              if not FSettings.FIgnoreNullValues then
+                Result.SetNull(Item^.JsonName);
+              Continue;
+            end;
+          end;
+      end;
 
     // Dispatch based on pre-computed kind
     case Item^.Kind of
