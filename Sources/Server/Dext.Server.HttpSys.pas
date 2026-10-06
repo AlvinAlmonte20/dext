@@ -83,6 +83,9 @@ type
     FRequest: TDextHttpSysRequest;
     FResponse: TDextHttpSysResponse;
     FResponseIntf: IDextRawResponse;
+    // Set by Destroy: a request or response released while its context is
+    // being destroyed must not hand the context back to a pool.
+    FDestroying: Boolean;
     FRequestIntf: IDextRawRequest;
     FConnection: TDextHttpSysConnection;
     FRefCount: Integer;
@@ -524,6 +527,14 @@ end;
 
 destructor TDextHttpSysContext.Destroy;
 begin
+  // Let go of the request and the response while the context is still whole.
+  // Releasing the last response reference used to call ReleaseContext on this
+  // very context, after its streams were freed (Reset then touched a freed
+  // TMemoryStream) and into the thread-local pool of the destroying thread
+  // (the next Start on that thread took a dead context from it).
+  FDestroying := True;
+  FResponseIntf := nil;
+  FRequestIntf := nil;
   FPrefetchedBody.Free;
   FBodyEvent.Free;
   inherited;
@@ -551,13 +562,13 @@ end;
 
 procedure TDextHttpSysContext.ReleaseRequestReference;
 begin
-  if TInterlocked.Decrement(FRefCount) = 0 then
+  if (TInterlocked.Decrement(FRefCount) = 0) and not FDestroying then
     TDextHttpSysEngine(FRequest.FEngine).ReleaseContext(Self);
 end;
 
 procedure TDextHttpSysContext.ReleaseResponseReference;
 begin
-  if TInterlocked.Decrement(FRefCount) = 0 then
+  if (TInterlocked.Decrement(FRefCount) = 0) and not FDestroying then
     TDextHttpSysEngine(FResponse.FEngine).ReleaseContext(Self);
 end;
 
@@ -2814,13 +2825,19 @@ begin
   //raise Exception.Create('TDextHttpSysEngine.Destroy CALLED');
   Stop;
   FWorkers.Free;
-  FRequestPool.Free;
-  FResponsePool.Free;
-  FBufferPool.Free;
+  // Contexts first: a context still holds the request and response of the
+  // last request it served, and freeing it hands them back through
+  // RecycleRequest / RecycleResponse. Freed the other way round, they went
+  // into pools that were already gone (the fields still pointed at them), so
+  // Release spun forever on a dead TSpinLock or raised an access violation.
   for I := 0 to FAllContexts.Count - 1 do
     TDextHttpSysContext(FAllContexts[I]).Free;
   FAllContexts.Free;
   FContextPool.Free;
+  // nil, so that anything recycled from now on is freed instead of pooled.
+  FreeAndNil(FRequestPool);
+  FreeAndNil(FResponsePool);
+  FreeAndNil(FBufferPool);
   inherited;
 end;
 
