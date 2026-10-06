@@ -86,7 +86,16 @@ type
     function GetSlotPtr(Index: Integer): Pointer; inline;
     function GetKeyPtr(SlotPtr: Pointer): Pointer; inline;
     function GetValuePtr(SlotPtr: Pointer): Pointer; inline;
-    function FindSlot(Key: Pointer; out SlotIndex: Integer): Boolean; inline;
+    function FindSlot(Key: Pointer; out SlotIndex: Integer): Boolean; overload; inline;
+    /// <summary>FindSlot that also hands back the hash of Key, so that an
+    ///   insertion can store its H2 byte without hashing the key again.</summary>
+    function FindSlot(Key: Pointer; out SlotIndex: Integer; out Hash: Cardinal): Boolean; overload; inline;
+    /// <summary>Finds the slot for a key that FindSlot reported absent,
+    ///   growing the table first if the new entry would exceed the load
+    ///   factor. Only a key that is really added can grow the table.</summary>
+    function SlotForNewKey(Key: Pointer; SlotIndex: Integer): Integer;
+    /// <summary>Writes a new entry in a free slot.</summary>
+    procedure StoreNew(SlotIndex: Integer; Key, Value: Pointer; Hash: Cardinal);
     procedure Grow;
     procedure Rehash(NewCapacity: Integer);
     procedure FreeSlotContent(SlotPtr: Pointer);
@@ -102,6 +111,12 @@ type
 
     /// <summary>Adds a key-value pair. Raises exception if key already exists</summary>
     procedure AddRaw(Key, Value: Pointer);
+
+    /// <summary>
+    ///   Adds a key-value pair if the key is not there yet, with a single
+    ///   lookup. Returns False, and changes nothing, if the key already exists.
+    /// </summary>
+    function TryAddRaw(Key, Value: Pointer): Boolean;
 
     /// <summary>Tries to get the value for a key. Returns pointer to value storage or nil</summary>
     function TryGetRaw(Key: Pointer; out ValuePtr: Pointer): Boolean; inline;
@@ -375,9 +390,8 @@ begin
   FillChar(SlotPtr^, FSlotSize, 0);
 end;
 
-function TRawDictionary.FindSlot(Key: Pointer; out SlotIndex: Integer): Boolean;
+function TRawDictionary.FindSlot(Key: Pointer; out SlotIndex: Integer; out Hash: Cardinal): Boolean;
 var
-  Hash: Cardinal;
   Mask: Integer;
   Idx: Integer;
   FirstTombstone: Integer;
@@ -437,6 +451,13 @@ begin
     SlotIndex := FirstTombstone
   else
     SlotIndex := -1;
+end;
+
+function TRawDictionary.FindSlot(Key: Pointer; out SlotIndex: Integer): Boolean;
+var
+  Hash: Cardinal;
+begin
+  Result := FindSlot(Key, SlotIndex, Hash);
 end;
 
 procedure TRawDictionary.Grow;
@@ -516,76 +537,27 @@ begin
   System.FreeMem(OldMetadata);
 end;
 
-procedure TRawDictionary.AddOrSetRaw(Key, Value: Pointer);
-var
-  SlotIndex: Integer;
-  Found: Boolean;
-  SlotPtr: Pointer;
-  Hash: Cardinal;
-  H2: Byte;
+function TRawDictionary.SlotForNewKey(Key: Pointer; SlotIndex: Integer): Integer;
 begin
-  // Check load factor before insertion
+  Result := SlotIndex;
   // Tombstones count towards the load: they occupy probe positions until the
   // next rehash, and ignoring them lets an Add/Remove cycle saturate the table.
-  if (FCount + FTombstones + 1) * 100 > FCapacity * MAX_LOAD_FACTOR then
+  // The check comes after the lookup, so an existing key never grows the
+  // table; after a rehash the slot found before is stale and is looked up
+  // again (the rare path).
+  if ((FCount + FTombstones + 1) * 100 > FCapacity * MAX_LOAD_FACTOR) or (Result < 0) then
+  begin
     Grow;
-
-  Found := FindSlot(Key, SlotIndex);
-  if not Found and (SlotIndex < 0) then
-    raise Exception.Create('TRawDictionary: no free slot available (internal invariant violated)');
-  SlotPtr := GetSlotPtr(SlotIndex);
-
-  if Found then
-  begin
-    // Update existing value
-    if FValueIsManaged then
-    begin
-      System.FinalizeArray(GetValuePtr(SlotPtr), FValueTypeInfo, 1);
-      System.CopyArray(GetValuePtr(SlotPtr), Value, FValueTypeInfo, 1);
-    end
-    else
-      System.Move(Value^, GetValuePtr(SlotPtr)^, FValueSize);
-  end
-  else
-  begin
-    // Insert new entry
-    if FKeyIsManaged then
-      System.CopyArray(SlotPtr, Key, FKeyTypeInfo, 1)
-    else
-      System.Move(Key^, SlotPtr^, FKeySize);
-
-    if FValueIsManaged then
-      System.CopyArray(GetValuePtr(SlotPtr), Value, FValueTypeInfo, 1)
-    else
-      System.Move(Value^, GetValuePtr(SlotPtr)^, FValueSize);
-
-    Hash := FHashFunc(Key, FKeySize);
-    H2 := Byte(Hash shr 24) or $80;
-    PByte(NativeUInt(FMetadata) + NativeUInt(SlotIndex))^ := H2;
-    Inc(FCount);
+    FindSlot(Key, Result);
   end;
+  if Result < 0 then
+    raise Exception.Create('TRawDictionary: no free slot available (internal invariant violated)');
 end;
 
-procedure TRawDictionary.AddRaw(Key, Value: Pointer);
+procedure TRawDictionary.StoreNew(SlotIndex: Integer; Key, Value: Pointer; Hash: Cardinal);
 var
-  SlotIndex: Integer;
-  Found: Boolean;
   SlotPtr: Pointer;
-  Hash: Cardinal;
-  H2: Byte;
 begin
-  // Tombstones count towards the load: they occupy probe positions until the
-  // next rehash, and ignoring them lets an Add/Remove cycle saturate the table.
-  if (FCount + FTombstones + 1) * 100 > FCapacity * MAX_LOAD_FACTOR then
-    Grow;
-
-  Found := FindSlot(Key, SlotIndex);
-
-  if Found then
-    raise Exception.Create('An item with the same key has already been added.');
-  if SlotIndex < 0 then
-    raise Exception.Create('TRawDictionary: no free slot available (internal invariant violated)');
-
   SlotPtr := GetSlotPtr(SlotIndex);
 
   if FKeyIsManaged then
@@ -598,10 +570,50 @@ begin
   else
     System.Move(Value^, GetValuePtr(SlotPtr)^, FValueSize);
 
-  Hash := FHashFunc(Key, FKeySize);
-  H2 := Byte(Hash shr 24) or $80;
-  PByte(NativeUInt(FMetadata) + NativeUInt(SlotIndex))^ := H2;
+  // H2 from the hash FindSlot already computed
+  PByte(NativeUInt(FMetadata) + NativeUInt(SlotIndex))^ := Byte(Hash shr 24) or $80;
   Inc(FCount);
+end;
+
+procedure TRawDictionary.AddOrSetRaw(Key, Value: Pointer);
+var
+  SlotIndex: Integer;
+  SlotPtr: Pointer;
+  Hash: Cardinal;
+begin
+  if FindSlot(Key, SlotIndex, Hash) then
+  begin
+    // Update existing value
+    SlotPtr := GetSlotPtr(SlotIndex);
+    if FValueIsManaged then
+    begin
+      System.FinalizeArray(GetValuePtr(SlotPtr), FValueTypeInfo, 1);
+      System.CopyArray(GetValuePtr(SlotPtr), Value, FValueTypeInfo, 1);
+    end
+    else
+      System.Move(Value^, GetValuePtr(SlotPtr)^, FValueSize);
+  end
+  else
+    StoreNew(SlotForNewKey(Key, SlotIndex), Key, Value, Hash);
+end;
+
+procedure TRawDictionary.AddRaw(Key, Value: Pointer);
+begin
+  if not TryAddRaw(Key, Value) then
+    raise Exception.Create('An item with the same key has already been added.');
+end;
+
+function TRawDictionary.TryAddRaw(Key, Value: Pointer): Boolean;
+var
+  SlotIndex: Integer;
+  Hash: Cardinal;
+begin
+  // One lookup: it says whether the key exists, where a new one goes, and
+  // gives the hash for the H2 byte.
+  if FindSlot(Key, SlotIndex, Hash) then
+    Exit(False);
+  StoreNew(SlotForNewKey(Key, SlotIndex), Key, Value, Hash);
+  Result := True;
 end;
 
 function TRawDictionary.TryGetRaw(Key: Pointer; out ValuePtr: Pointer): Boolean;

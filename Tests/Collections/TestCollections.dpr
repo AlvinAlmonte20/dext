@@ -53,7 +53,8 @@ uses
   TestCollections.Comparers in 'TestCollections.Comparers.pas',
   TestCollections.QueuesAndStacks in 'TestCollections.QueuesAndStacks.pas',
   TestCollections.Robustness in 'TestCollections.Robustness.pas',
-  TestCollections.PersonList in 'TestCollections.PersonList.pas';
+  TestCollections.PersonList in 'TestCollections.PersonList.pas',
+  TestCollections.TryAdd in 'TestCollections.TryAdd.pas';
 
 begin
   SetConsoleCharSet;
@@ -89,6 +90,9 @@ begin
           TOrderedDictTypeTests,
           TOrderedDictOwnershipTests,
           TOrderedDictStressTests,
+          TDictionaryTryAddTests,
+          TOrderedDictionaryTryAddTests,
+          TRawDictionaryTryAddTests,
           TCollectionsFactoryTests,
           TFactoryTests,
           TFrozenDictionaryTests,

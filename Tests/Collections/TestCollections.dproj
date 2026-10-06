@@ -117,6 +117,7 @@
         <DCCReference Include="TestCollections.QueuesAndStacks.pas"/>
         <DCCReference Include="TestCollections.Robustness.pas"/>
         <DCCReference Include="TestCollections.PersonList.pas"/>
+        <DCCReference Include="TestCollections.TryAdd.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

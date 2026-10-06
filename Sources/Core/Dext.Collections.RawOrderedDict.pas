@@ -75,6 +75,12 @@ type
     procedure AddRaw(Key, Value: Pointer);
 
     /// <summary>
+    ///   Appends a new pair if the key is not there yet, with a single lookup
+    ///   in the index. Returns False, and changes nothing, if the key exists.
+    /// </summary>
+    function TryAddRaw(Key, Value: Pointer): Boolean;
+
+    /// <summary>
     ///   Adds a new pair (appended) or, if the key exists, updates its value
     ///   in place without changing its position.
     /// </summary>
@@ -166,16 +172,24 @@ begin
 end;
 
 procedure TRawOrderedDictionary.AddRaw(Key, Value: Pointer);
+begin
+  if not TryAddRaw(Key, Value) then
+    raise Exception.Create('An item with the same key has already been added.');
+end;
+
+function TRawOrderedDictionary.TryAddRaw(Key, Value: Pointer): Boolean;
 var
   Pos: Integer;
 begin
-  if FIndex.ContainsKeyRaw(Key) then
-    raise Exception.Create('An item with the same key has already been added.');
-
+  // The index decides: the key and value lists grow only for a key it
+  // accepted, at the position it was given.
   Pos := FKeys.Count;
-  FKeys.AddRaw(Key);
-  FValues.AddRaw(Value);
-  FIndex.AddRaw(Key, @Pos);
+  Result := FIndex.TryAddRaw(Key, @Pos);
+  if Result then
+  begin
+    FKeys.AddRaw(Key);
+    FValues.AddRaw(Value);
+  end;
 end;
 
 procedure TRawOrderedDictionary.AddOrSetRaw(Key, Value: Pointer);
