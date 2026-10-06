@@ -1386,6 +1386,12 @@ end;
 ///   number, a string for a string or a date, true/false for a Boolean. A
 ///   number written as a string ("7") is accepted; a value that does not
 ///   convert raises.</summary>
+/// <remarks>A number is read from its text as written (AsString). ToJson
+///   writes a primitive through a Double, so 9007199254740993 became
+///   "9.00719925474099E15" and an Int64 or UInt64 with more than 15 digits
+///   was refused; it also built a writer per field. AsInt64 stops at the
+///   decimal point and wraps on overflow (7.5 would bind as 7). ToJson stays
+///   on the error paths only.</remarks>
 function StrictJson(const ANode: IDextJsonNode; AType: PTypeInfo; const AField: string): TValue;
 var
   IsDate: Boolean;
@@ -1399,7 +1405,7 @@ begin
   case AType.Kind of
     tkInteger, tkInt64:
       case ANode.NodeType of
-        jntNumber: Result := StrictInteger(ANode.ToJson, AType, AField);
+        jntNumber: Result := StrictInteger(ANode.AsString, AType, AField);
         jntString: Result := StrictInteger(ANode.AsString, AType, AField);
       else
         raise FieldError(AField, ANode.ToJson, 'expected an integer');
@@ -1411,7 +1417,7 @@ begin
         if ANode.NodeType = jntString then
           Result := StrictFloat(ANode.AsString, AType, AField)
         else if (ANode.NodeType = jntNumber) and not IsDate then
-          Result := StrictFloat(ANode.ToJson, AType, AField)
+          Result := StrictFloat(ANode.AsString, AType, AField)
         else if IsDate then
           raise FieldError(AField, ANode.ToJson, 'expected a date/time string')
         else
@@ -1425,7 +1431,7 @@ begin
           else
             raise FieldError(AField, ANode.ToJson, 'not a value of ' + GetTypeName(AType));
         jntString: Result := StrictEnum(ANode.AsString, AType, AField);
-        jntNumber: Result := StrictEnum(ANode.ToJson, AType, AField);
+        jntNumber: Result := StrictEnum(ANode.AsString, AType, AField);
       else
         raise FieldError(AField, ANode.ToJson, 'expected a value of ' + GetTypeName(AType));
       end;
@@ -1433,7 +1439,13 @@ begin
       case ANode.NodeType of
         // As written: no URL decoding of JSON strings.
         jntString: Result := TValue.From<string>(ANode.AsString);
-        jntNumber, jntBoolean: Result := TValue.From<string>(ANode.ToJson);
+        jntNumber: Result := TValue.From<string>(ANode.AsString);
+        // The JSON literal, whatever the driver's AsString gives for it.
+        jntBoolean:
+          if ANode.AsBoolean then
+            Result := TValue.From<string>('true')
+          else
+            Result := TValue.From<string>('false');
       else
         raise FieldError(AField, ANode.ToJson, 'expected a string');
       end;

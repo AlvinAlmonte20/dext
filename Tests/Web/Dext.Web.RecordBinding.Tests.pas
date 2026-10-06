@@ -20,6 +20,8 @@ type
     When: TDateTime;
     Key: TGUID;
     Small: Byte;
+    Big: Int64;
+    Huge: UInt64;
   end;
 
   // Bound only from the query: an empty body is fine.
@@ -62,6 +64,20 @@ type
     procedure TestFractionForInteger;
     [Test('300 for a Byte -> 400')]
     procedure TestOutOfRange;
+    // A JSON number is converted from its text as written, so the range and
+    // fraction checks see the real value.
+    [Test('Int64 above 2^53 is bound with its exact value')]
+    procedure TestInt64AboveDoublePrecision;
+    [Test('Int64 one past High(Int64) -> 400, not wrapped')]
+    procedure TestInt64Overflow;
+    [Test('UInt64 above High(Int64) is bound')]
+    procedure TestUInt64AboveInt64;
+    [Test('A number with an exponent for a Double is bound')]
+    procedure TestExponentForDouble;
+    [Test('Enum by ordinal number is bound')]
+    procedure TestEnumByOrdinal;
+    [Test('A number or a Boolean for a string is taken as its JSON text')]
+    procedure TestNumberAndBooleanForString;
     [Test('"maybe" for a Boolean -> 400')]
     procedure TestInvalidBoolean;
     [Test('Enum by name is bound (it became the first member)')]
@@ -233,6 +249,45 @@ end;
 procedure TRecordBindingTests.TestOutOfRange;
 begin
   ShouldRefuse('{"Small":300}', 'Small');
+end;
+
+procedure TRecordBindingTests.TestInt64AboveDoublePrecision;
+begin
+  // 2^53 + 1: through a Double it was written as 9.00719925474099E15 and
+  // refused.
+  ShouldAccept('{"Big":9007199254740993}');
+  Should(Received.Big = 9007199254740993).BeTrue;
+end;
+
+procedure TRecordBindingTests.TestInt64Overflow;
+begin
+  ShouldRefuse('{"Big":9223372036854775808}', 'Big');
+end;
+
+procedure TRecordBindingTests.TestUInt64AboveInt64;
+begin
+  ShouldAccept('{"Huge":18446744073709551615}');
+  Should(Received.Huge = High(UInt64)).BeTrue;
+end;
+
+procedure TRecordBindingTests.TestExponentForDouble;
+begin
+  ShouldAccept('{"Rate":1.5e2}');
+  Should(Received.Rate).Be(150.0);
+end;
+
+procedure TRecordBindingTests.TestEnumByOrdinal;
+begin
+  ShouldAccept('{"Status":1}');
+  Should(Ord(Received.Status)).Be(Ord(bsClosed));
+end;
+
+procedure TRecordBindingTests.TestNumberAndBooleanForString;
+begin
+  ShouldAccept('{"Name":12.50}');
+  Should(Received.Name).Be('12.50');
+  ShouldAccept('{"Name":true}');
+  Should(Received.Name).Be('true');
 end;
 
 procedure TRecordBindingTests.TestInvalidBoolean;
