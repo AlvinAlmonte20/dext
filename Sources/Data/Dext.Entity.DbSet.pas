@@ -442,7 +442,10 @@ begin
       else if Underlying = TypeInfo(TDate) then Result := ftDate
       else if Underlying = TypeInfo(TTime) then Result := ftTime
       else Result := ftFloat;
-    tkString, tkUString, tkWString, tkChar, tkWChar: Result := ftString;
+    // Unicode strings bind as ftWideString (same as the single-row path); ftString corrupts non-ASCII text
+    // in Array DML (see TDEXTBatchHelper.GetFieldType).
+    tkUString, tkWString, tkWChar: Result := ftWideString;
+    tkString, tkChar: Result := ftString;
     tkEnumeration:
       if Underlying = TypeInfo(Boolean) then Result := ftBoolean
       else Result := ftInteger;
