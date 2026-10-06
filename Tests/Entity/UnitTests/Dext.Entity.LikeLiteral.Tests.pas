@@ -61,6 +61,12 @@ type
     procedure Test_Like_Keeps_Its_Wildcards;
     [Test]
     procedure Test_Cached_Statement_Gets_The_Same_Parameter;
+    [Test]
+    procedure Test_Firebird_StartsWith_Is_Starting_With;
+    [Test]
+    procedure Test_Firebird_EndsWith_And_Contains_Keep_Like;
+    [Test]
+    procedure Test_Firebird_Cached_Statement_Gets_The_Plain_Value;
   end;
 
   [Fixture]
@@ -203,6 +209,53 @@ begin
     Gen.Free;
   end;
   Should(First).Be('Z!_9%');
+  Should(Second).Be(First);
+end;
+
+procedure TLikeLiteralSqlTests.Test_Firebird_StartsWith_Is_Starting_With;
+var
+  SQL, Param: string;
+begin
+  // A LIKE with a parameter never uses an index on Firebird; STARTING WITH
+  // does, and has no wildcards, so the value goes as it is.
+  SQL := WhereOf(TFirebirdDialect.Create, CodeProp.StartsWith('A_1%!'), Param);
+  Should(SQL).Contain('STARTING WITH :p1');
+  Should(SQL).NotContain('LIKE');
+  Should(SQL).NotContain('ESCAPE');
+  Should(Param).Be('A_1%!');
+end;
+
+procedure TLikeLiteralSqlTests.Test_Firebird_EndsWith_And_Contains_Keep_Like;
+var
+  SQL, Param: string;
+begin
+  SQL := WhereOf(TFirebirdDialect.Create, CodeProp.EndsWith('_x'), Param);
+  Should(SQL).Contain('LIKE :p1 ESCAPE ''!''');
+  Should(Param).Be('%!_x');
+  SQL := WhereOf(TFirebirdDialect.Create, CodeProp.Contains('100%'), Param);
+  Should(SQL).Contain('LIKE :p1 ESCAPE ''!''');
+  Should(Param).Be('%100!%%');
+end;
+
+procedure TLikeLiteralSqlTests.Test_Firebird_Cached_Statement_Gets_The_Plain_Value;
+var
+  Gen: TSqlGenerator<TLikeCode>;
+  Spec: ISpecification<TLikeCode>;
+  First, Second: string;
+begin
+  // The cached statement says STARTING WITH: its parameter must not be the
+  // escaped LIKE pattern.
+  Spec := TSpecification<TLikeCode>.Create(CodeProp.StartsWith('Z_9'));
+  Gen := TSqlGenerator<TLikeCode>.Create(TFirebirdDialect.Create, nil);
+  try
+    Gen.GenerateSelect(Spec);
+    First := Gen.Params['p1'].AsString;
+    Gen.GenerateSelect(Spec);
+    Second := Gen.Params['p1'].AsString;
+  finally
+    Gen.Free;
+  end;
+  Should(First).Be('Z_9');
   Should(Second).Be(First);
 end;
 
