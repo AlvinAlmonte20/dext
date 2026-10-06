@@ -14,7 +14,8 @@ uses
   Dext.Net.RestClient in '..\..\Sources\Net\Dext.Net.RestClient.pas',
   Dext.Net.RestRequest in '..\..\Sources\Net\Dext.Net.RestRequest.pas',
   TRestClient_Streaming_Tests in 'TRestClient_Streaming_Tests.pas',
-  TRestClient_Certificate_Tests in 'TRestClient_Certificate_Tests.pas';
+  TRestClient_Certificate_Tests in 'TRestClient_Certificate_Tests.pas',
+  TRestClient_IntoBody_Tests in 'TRestClient_IntoBody_Tests.pas';
 
 begin
   SetConsoleCharSet;
@@ -24,7 +25,8 @@ begin
       .RegisterFixtures([
         TDextDownloadGateTests,
         TRestClientStreamingTests,
-        TRestClientCertificateTests
+        TRestClientCertificateTests,
+        TRestClientIntoBodyTests
       ]));
   except
     on error: Exception do

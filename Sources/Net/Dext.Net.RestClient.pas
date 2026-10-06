@@ -431,6 +431,15 @@ uses
     FInstance: IRestClient;
     class var FSharedPool: TConnectionPool;
     class destructor Destroy;
+    /// <summary>The checks shared by the *Into verbs and ExecuteIntoAsync on
+    ///   the facade: a nil target frees an owned body and raises; the same
+    ///   stream as body and target raises without freeing it.</summary>
+    class procedure CheckIntoArgs(const ATarget, ABody: TStream;
+      AOwnsBody: Boolean); static;
+    /// <summary>The *Into verbs: without a body exactly as before, with a body
+    ///   through ExecuteIntoAsync.</summary>
+    function IntoWithBody(AMethod: TDextHttpMethod; const AEndpoint: string;
+      const AResponseStream, ABody: TStream; AOwnsBody: Boolean): TAsyncBuilder<IRestResponse>;
   public
     /// <summary>Starts configuring a new REST Client.</summary>
     class function Create(const ABaseUrl: string = ''): TRestClient; static;
@@ -559,17 +568,39 @@ uses
       const ABody: TStream = nil; AOwnsBody: Boolean = False;
       AHeaders: IDictionary<string, string> = nil): TAsyncBuilder<IRestResponse>;
 
+    /// <summary>Executes any verb streaming the response body into ATarget
+    ///   (see IRestClient.ExecuteIntoAsync).</summary>
+    function ExecuteIntoAsync(AMethod: TDextHttpMethod; const AEndpoint: string;
+      const ATarget: TStream; const ABody: TStream = nil; AOwnsBody: Boolean = False;
+      AHeaders: IDictionary<string, string> = nil;
+      const AProgress: TRestReceiveAnonEvent = nil): TAsyncBuilder<IRestResponse>;
+
     // === Streaming download (S58) ===
     /// <summary>GET streamed straight into AResponseStream (no memory buffering).</summary>
     function GetInto(const AEndpoint: string; const AResponseStream: TStream): TAsyncBuilder<IRestResponse>;
-    /// <summary>POST whose response is streamed into AResponseStream.</summary>
-    function PostInto(const AEndpoint: string; const AResponseStream: TStream): TAsyncBuilder<IRestResponse>;
-    /// <summary>PUT whose response is streamed into AResponseStream.</summary>
-    function PutInto(const AEndpoint: string; const AResponseStream: TStream): TAsyncBuilder<IRestResponse>;
-    /// <summary>PATCH whose response is streamed into AResponseStream.</summary>
-    function PatchInto(const AEndpoint: string; const AResponseStream: TStream): TAsyncBuilder<IRestResponse>;
-    /// <summary>QUERY whose response is streamed into AResponseStream.</summary>
-    function QueryInto(const AEndpoint: string; const AResponseStream: TStream): TAsyncBuilder<IRestResponse>;
+    /// <summary>
+    ///   POST whose response is streamed into AResponseStream. ABody, when
+    ///   given, is the request body, sent with the client's Content-Type.
+    /// </summary>
+    /// <param name="AOwnsBody">True: the client frees ABody when the request
+    ///   is over, whatever the outcome.</param>
+    function PostInto(const AEndpoint: string; const AResponseStream: TStream;
+      const ABody: TStream = nil; AOwnsBody: Boolean = False): TAsyncBuilder<IRestResponse>;
+    /// <summary>PUT whose response is streamed into AResponseStream, with an
+    ///   optional request body (see PostInto).</summary>
+    function PutInto(const AEndpoint: string; const AResponseStream: TStream;
+      const ABody: TStream = nil; AOwnsBody: Boolean = False): TAsyncBuilder<IRestResponse>;
+    /// <summary>PATCH whose response is streamed into AResponseStream, with an
+    ///   optional request body (see PostInto).</summary>
+    function PatchInto(const AEndpoint: string; const AResponseStream: TStream;
+      const ABody: TStream = nil; AOwnsBody: Boolean = False): TAsyncBuilder<IRestResponse>;
+    /// <summary>
+    ///   QUERY whose response is streamed into AResponseStream, with an
+    ///   optional request body (see PostInto): QUERY is how large reads with a
+    ///   request body are done.
+    /// </summary>
+    function QueryInto(const AEndpoint: string; const AResponseStream: TStream;
+      const ABody: TStream = nil; AOwnsBody: Boolean = False): TAsyncBuilder<IRestResponse>;
     /// <summary>Downloads to a file, streaming (memory flat) with atomic rename.</summary>
     function DownloadToFile(const AEndpoint: string; const ATargetFilePath: string;
       const AProgress: TRestReceiveAnonEvent = nil;
@@ -1829,28 +1860,80 @@ begin
   Result := FInstance.GetInto(AEndpoint, AResponseStream);
 end;
 
-function TRestClient.PostInto(const AEndpoint: string;
-  const AResponseStream: TStream): TAsyncBuilder<IRestResponse>;
+class procedure TRestClient.CheckIntoArgs(const ATarget, ABody: TStream;
+  AOwnsBody: Boolean);
 begin
-  Result := FInstance.PostInto(AEndpoint, AResponseStream);
+  if ATarget = nil then
+  begin
+    // Refused before the request takes the body: keep the AOwnsBody promise,
+    // and raise here rather than pass the freed body on.
+    if AOwnsBody then
+      ABody.Free;
+    raise EArgumentNilException.Create('ExecuteIntoAsync: target stream is required');
+  end;
+  if (ABody <> nil) and (ABody = ATarget) then
+    // One stream read as the body and written as the response: neither
+    // would survive. Not freed even with AOwnsBody, since it is also the
+    // caller's target.
+    raise EArgumentException.Create(
+      'The request body and the response stream must be different streams');
+end;
+
+function TRestClient.IntoWithBody(AMethod: TDextHttpMethod; const AEndpoint: string;
+  const AResponseStream, ABody: TStream; AOwnsBody: Boolean): TAsyncBuilder<IRestResponse>;
+begin
+  CheckIntoArgs(AResponseStream, ABody, AOwnsBody);
+  Result := FInstance.ExecuteIntoAsync(AMethod, AEndpoint, AResponseStream, ABody, AOwnsBody);
+end;
+
+function TRestClient.ExecuteIntoAsync(AMethod: TDextHttpMethod; const AEndpoint: string;
+  const ATarget: TStream; const ABody: TStream; AOwnsBody: Boolean;
+  AHeaders: IDictionary<string, string>;
+  const AProgress: TRestReceiveAnonEvent): TAsyncBuilder<IRestResponse>;
+begin
+  CheckIntoArgs(ATarget, ABody, AOwnsBody);
+  Result := FInstance.ExecuteIntoAsync(AMethod, AEndpoint, ATarget, ABody, AOwnsBody,
+    AHeaders, AProgress);
+end;
+
+function TRestClient.PostInto(const AEndpoint: string;
+  const AResponseStream: TStream; const ABody: TStream;
+  AOwnsBody: Boolean): TAsyncBuilder<IRestResponse>;
+begin
+  if ABody = nil then
+    Result := FInstance.PostInto(AEndpoint, AResponseStream)
+  else
+    Result := IntoWithBody(hmPOST, AEndpoint, AResponseStream, ABody, AOwnsBody);
 end;
 
 function TRestClient.PutInto(const AEndpoint: string;
-  const AResponseStream: TStream): TAsyncBuilder<IRestResponse>;
+  const AResponseStream: TStream; const ABody: TStream;
+  AOwnsBody: Boolean): TAsyncBuilder<IRestResponse>;
 begin
-  Result := FInstance.PutInto(AEndpoint, AResponseStream);
+  if ABody = nil then
+    Result := FInstance.PutInto(AEndpoint, AResponseStream)
+  else
+    Result := IntoWithBody(hmPUT, AEndpoint, AResponseStream, ABody, AOwnsBody);
 end;
 
 function TRestClient.PatchInto(const AEndpoint: string;
-  const AResponseStream: TStream): TAsyncBuilder<IRestResponse>;
+  const AResponseStream: TStream; const ABody: TStream;
+  AOwnsBody: Boolean): TAsyncBuilder<IRestResponse>;
 begin
-  Result := FInstance.PatchInto(AEndpoint, AResponseStream);
+  if ABody = nil then
+    Result := FInstance.PatchInto(AEndpoint, AResponseStream)
+  else
+    Result := IntoWithBody(hmPATCH, AEndpoint, AResponseStream, ABody, AOwnsBody);
 end;
 
 function TRestClient.QueryInto(const AEndpoint: string;
-  const AResponseStream: TStream): TAsyncBuilder<IRestResponse>;
+  const AResponseStream: TStream; const ABody: TStream;
+  AOwnsBody: Boolean): TAsyncBuilder<IRestResponse>;
 begin
-  Result := FInstance.QueryInto(AEndpoint, AResponseStream);
+  if ABody = nil then
+    Result := FInstance.QueryInto(AEndpoint, AResponseStream)
+  else
+    Result := IntoWithBody(hmQUERY, AEndpoint, AResponseStream, ABody, AOwnsBody);
 end;
 
 function TRestClient.DownloadToFile(const AEndpoint: string;
