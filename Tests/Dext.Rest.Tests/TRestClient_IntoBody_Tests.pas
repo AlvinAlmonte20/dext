@@ -70,6 +70,10 @@ type
     procedure SameStreamForBodyAndTarget_IsRefused;
     [Test]
     procedure NilTarget_FreesAnOwnedBody;
+    [Test]
+    procedure ExecuteIntoAsync_NilTarget_FreesAnOwnedBody;
+    [Test]
+    procedure NilTargetAndNilBody_IsTheNilTargetError;
   end;
 
 implementation
@@ -314,6 +318,39 @@ begin
   end;
   Should(Raised).BeTrue;
   Should(TWatchedStream.Freed).BeTrue;
+end;
+
+procedure TRestClientIntoBodyTests.ExecuteIntoAsync_NilTarget_FreesAnOwnedBody;
+var
+  Raised: Boolean;
+begin
+  // The facade ExecuteIntoAsync shares the checks of the *Into verbs: an
+  // owned body is not leaked when the call is refused.
+  Raised := False;
+  try
+    RestClient(FBaseUrl).ExecuteIntoAsync(hmPOST, '/eco', nil,
+      TWatchedStream.Create('lost', TEncoding.UTF8), True);
+  except
+    on EArgumentNilException do
+      Raised := True;
+  end;
+  Should(Raised).BeTrue;
+  Should(TWatchedStream.Freed).BeTrue;
+end;
+
+procedure TRestClientIntoBodyTests.NilTargetAndNilBody_IsTheNilTargetError;
+var
+  Raised: Boolean;
+begin
+  // nil = nil, but the error is the missing target, not "same stream".
+  Raised := False;
+  try
+    RestClient(FBaseUrl).ExecuteIntoAsync(hmPOST, '/eco', nil, nil);
+  except
+    on EArgumentNilException do
+      Raised := True;
+  end;
+  Should(Raised).BeTrue;
 end;
 
 end.

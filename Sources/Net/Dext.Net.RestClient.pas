@@ -431,6 +431,11 @@ uses
     FInstance: IRestClient;
     class var FSharedPool: TConnectionPool;
     class destructor Destroy;
+    /// <summary>The checks shared by the *Into verbs and ExecuteIntoAsync on
+    ///   the facade: a nil target frees an owned body and raises; the same
+    ///   stream as body and target raises without freeing it.</summary>
+    class procedure CheckIntoArgs(const ATarget, ABody: TStream;
+      AOwnsBody: Boolean); static;
     /// <summary>The *Into verbs: without a body exactly as before, with a body
     ///   through ExecuteIntoAsync.</summary>
     function IntoWithBody(AMethod: TDextHttpMethod; const AEndpoint: string;
@@ -1855,19 +1860,29 @@ begin
   Result := FInstance.GetInto(AEndpoint, AResponseStream);
 end;
 
-function TRestClient.IntoWithBody(AMethod: TDextHttpMethod; const AEndpoint: string;
-  const AResponseStream, ABody: TStream; AOwnsBody: Boolean): TAsyncBuilder<IRestResponse>;
+class procedure TRestClient.CheckIntoArgs(const ATarget, ABody: TStream;
+  AOwnsBody: Boolean);
 begin
-  if ABody = AResponseStream then
+  if ATarget = nil then
+  begin
+    // Refused before the request takes the body: keep the AOwnsBody promise,
+    // and raise here rather than pass the freed body on.
+    if AOwnsBody then
+      ABody.Free;
+    raise EArgumentNilException.Create('ExecuteIntoAsync: target stream is required');
+  end;
+  if (ABody <> nil) and (ABody = ATarget) then
     // One stream read as the body and written as the response: neither
     // would survive. Not freed even with AOwnsBody, since it is also the
     // caller's target.
     raise EArgumentException.Create(
       'The request body and the response stream must be different streams');
-  if (AResponseStream = nil) and AOwnsBody then
-    // ExecuteIntoAsync refuses a nil target before taking the body: keep the
-    // AOwnsBody promise on this path too.
-    ABody.Free;
+end;
+
+function TRestClient.IntoWithBody(AMethod: TDextHttpMethod; const AEndpoint: string;
+  const AResponseStream, ABody: TStream; AOwnsBody: Boolean): TAsyncBuilder<IRestResponse>;
+begin
+  CheckIntoArgs(AResponseStream, ABody, AOwnsBody);
   Result := FInstance.ExecuteIntoAsync(AMethod, AEndpoint, AResponseStream, ABody, AOwnsBody);
 end;
 
@@ -1876,6 +1891,7 @@ function TRestClient.ExecuteIntoAsync(AMethod: TDextHttpMethod; const AEndpoint:
   AHeaders: IDictionary<string, string>;
   const AProgress: TRestReceiveAnonEvent): TAsyncBuilder<IRestResponse>;
 begin
+  CheckIntoArgs(ATarget, ABody, AOwnsBody);
   Result := FInstance.ExecuteIntoAsync(AMethod, AEndpoint, ATarget, ABody, AOwnsBody,
     AHeaders, AProgress);
 end;
