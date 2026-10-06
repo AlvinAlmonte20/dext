@@ -140,6 +140,12 @@ type
 
     /// <summary>Adds a new key-value pair. Raises if the key already exists.</summary>
     procedure Add(const Key: K; const Value: V);
+    /// <summary>
+    ///   Appends the pair if the key is not there yet, with a single lookup.
+    ///   Returns False, and changes nothing, if the key already exists: with
+    ///   OwnsValues the dictionary does not take the refused value.
+    /// </summary>
+    function TryAdd(const Key: K; const Value: V): Boolean;
     /// <summary>Adds a new pair or updates the existing value in-place without changing key order.</summary>
     procedure AddOrSetValue(const Key: K; const Value: V);
     /// <summary>Attempts to retrieve the value associated with the key.</summary>
@@ -372,6 +378,11 @@ end;
 procedure TOrderedDictionary<K, V>.Add(const Key: K; const Value: V);
 begin
   FCore.AddRaw(@Key, @Value);
+end;
+
+function TOrderedDictionary<K, V>.TryAdd(const Key: K; const Value: V): Boolean;
+begin
+  Result := FCore.TryAddRaw(@Key, @Value);
 end;
 
 procedure TOrderedDictionary<K, V>.AddOrSetValue(const Key: K; const Value: V);

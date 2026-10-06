@@ -170,6 +170,12 @@ type
     function GetEnumerator: TDictionaryEnumerator<K, V>; reintroduce; inline;
     
     procedure Add(const Key: K; const Value: V);
+    /// <summary>
+    ///   Adds the pair if the key is not there yet, with a single lookup.
+    ///   Returns False, and changes nothing, if the key already exists: with
+    ///   OwnsValues the dictionary does not take the refused value.
+    /// </summary>
+    function TryAdd(const Key: K; const Value: V): Boolean;
     procedure AddOrSetValue(const Key: K; const Value: V);
     function TryGetValue(const Key: K; out Value: V): Boolean;
     function ContainsKey(const Key: K): Boolean;
@@ -435,6 +441,11 @@ var
 begin
   KP := @Key;
   FCore.AddRaw(KP, @Value);
+end;
+
+function TDictionary<K, V>.TryAdd(const Key: K; const Value: V): Boolean;
+begin
+  Result := FCore.TryAddRaw(@Key, @Value);
 end;
 
 procedure TDictionary<K, V>.AddOrSetValue(const Key: K; const Value: V);
