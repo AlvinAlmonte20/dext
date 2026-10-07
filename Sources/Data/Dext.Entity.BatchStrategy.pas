@@ -164,7 +164,12 @@ begin
       else if Underlying = TypeInfo(TDate) then Result := ftDate
       else if Underlying = TypeInfo(TTime) then Result := ftTime
       else Result := ftFloat;
-    tkString, tkUString, tkWString, tkChar, tkWChar: Result := ftString;
+    // Unicode strings must bind as ftWideString, exactly like the single-row path
+    // (TFireDACCommand.SetParamValue). ftString makes FireDAC store the value as AnsiString and convert it
+    // back with the byte length: on Linux (UTF-8 ANSI) every non-ASCII char leaves a trailing #0 and
+    // PostgreSQL rejects the batch with "invalid byte sequence for encoding UTF8: 0x00".
+    tkUString, tkWString, tkWChar: Result := ftWideString;
+    tkString, tkChar: Result := ftString;
     tkEnumeration:
       if Underlying = TypeInfo(Boolean) then Result := ftBoolean
       else Result := ftInteger;
