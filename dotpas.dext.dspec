@@ -92,11 +92,11 @@ templates:
   - name: default
     dependencies:
       - id: Indy.Core
-        version: 999.999.999
+        version: bundled
       - id: Indy.System
-        version: 999.999.999
+        version: bundled
       - id: Indy.Protocols
-        version: 999.999.999
+        version: bundled
     source:
       - src: ./LICENSE
       - src: ./External/DelphiAST/Source/*.pas
