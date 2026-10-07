@@ -5,11 +5,11 @@ metadata:
   version: 1.0.0
   description: Dext - Modern Full Stack Framework for Delphi
   authors:
-    - Steema
-  projectUrl: https://github.com/vincentparrett/dext
-  repositoryUrl: https://github.com/vincentparrett/dext
+    - Cesar Romero
+  projectUrl: https://github.com/dotpas/dext
+  repositoryUrl: https://github.com/dotpas/dext
   license: Apache-2.0
-  copyright: Steema and contributors
+  copyright: Cesar Romero
   readme: README.md
 variables:
   packagesource: d$compilerCodeName$
@@ -57,26 +57,35 @@ targetPlatforms:
     variables:
       packagesource: dxe8
   - compiler from: delphi10.0
+    compiler to: delphi10.1
+    platforms:
+      - win32
+      - win64
+  - compiler from: delphi10.2
     compiler to: delphi10.4
     platforms:
       - win32
       - win64
+      - linux64
   - compiler: delphi11.0
     platforms:
       - win32
       - win64
+      - linux64
     variables:
       packagesource: d11
   - compiler: delphi12.0
     platforms:
       - win32
       - win64
+      - linux64
     variables:
       packagesource: d12
   - compiler: delphi13.0
     platforms:
       - win32
       - win64
+      - linux64
     variables:
       packagesource: d13
 templates:
