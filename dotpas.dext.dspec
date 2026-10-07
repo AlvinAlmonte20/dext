@@ -1,0 +1,132 @@
+# DPM package spec file
+min dpm client version: 1.0.0
+metadata:
+  id: dotpas.dext
+  version: 1.0.0
+  description: Dext - Modern Full Stack Framework for Delphi
+  authors:
+    - Steema
+  projectUrl: https://github.com/vincentparrett/dext
+  repositoryUrl: https://github.com/vincentparrett/dext
+  license: Apache-2.0
+  copyright: Steema and contributors
+  readme: README.md
+variables:
+  packagesource: d$compilerCodeName$
+targetPlatforms:
+  - compiler: delphixe2
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: dxe2
+  - compiler: delphixe3
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: dxe3
+  - compiler: delphixe4
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: dxe4
+  - compiler: delphixe5
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: dxe5
+  - compiler: delphixe6
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: dxe6
+  - compiler: delphixe7
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: dxe7
+  - compiler: delphixe8
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: dxe8
+  - compiler from: delphi10.0
+    compiler to: delphi10.4
+    platforms:
+      - win32
+      - win64
+  - compiler: delphi11.0
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: d11
+  - compiler: delphi12.0
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: d12
+  - compiler: delphi13.0
+    platforms:
+      - win32
+      - win64
+    variables:
+      packagesource: d13
+templates:
+  - name: default
+    dependencies:
+      - id: Indy.Core
+        version: 999.999.999
+      - id: Indy.System
+        version: 999.999.999
+      - id: Indy.Protocols
+        version: 999.999.999
+    source:
+      - src: ./LICENSE
+      - src: ./External/DelphiAST/Source/*.pas
+      - src: ./External/DelphiAST/Source/SimpleParser/*.pas
+      - src: ./Sources/**.pas
+      - src: ./Sources/**.dfm
+      - src: ./Sources/**.res
+      - src: ./Sources/**.inc
+      - src: ./Packages/$packageSource$/*.dpk
+      - src: ./Packages/$packageSource$/*.dproj
+      - src: ./Apps/CLI/**.pas
+      - src: ./Apps/CLI/*.dpr
+      - src: ./Apps/CLI/**.res
+      - src: ./Apps/CLI/*.dproj
+      - src: ./Apps/Sidecar/**.pas
+      - src: ./Apps/Sidecar/**.dfm
+      - src: ./Apps/Sidecar/*.dpr
+      - src: ./Apps/Sidecar/*.dproj
+      - src: ./Apps/Sidecar/**.res
+      - src: ./Apps/Sidecar/**.ico
+    build:
+      - project: ./Packages/$packageSource$/Dext.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.AST.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.Net.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.EF.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.EF.Components.dproj
+      - project: ./Packages/$packageSource$/Dext.Web.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.AI.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.Web.Hubs.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.Events.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.Hosting.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.Testing.Core.dproj
+      - project: ./Packages/$packageSource$/Dext.UI.Core.dproj
+    design:
+      - project: ./Packages/$packageSource$/Dext.EF.Design.dproj
+        platforms:
+          - win32
+          - win64
+      - project: ./Packages/$packageSource$/Dext.Testing.Design.dproj
+        platforms:
+          - win32
+          - win64
