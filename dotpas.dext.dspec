@@ -130,6 +130,9 @@ templates:
       - project: ./Packages/$packageSource$/Dext.Hosting.Core.dproj
       - project: ./Packages/$packageSource$/Dext.Testing.Core.dproj
       - project: ./Packages/$packageSource$/Dext.UI.Core.dproj
+        platforms:
+          - win32
+          - win64
     design:
       - project: ./Packages/$packageSource$/Dext.EF.Design.dproj
         platforms:
