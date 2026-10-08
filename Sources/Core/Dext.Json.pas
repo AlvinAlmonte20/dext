@@ -316,6 +316,12 @@ type
     DirectKind: TDextNativeKind;
     /// <summary>True when JSON can read this property without TValue/RTTI.</summary>
     UseDirect: Boolean;
+    /// <summary>
+    ///   Direct path on a Nullable: offset of its HasValue flag (a Boolean),
+    ///   -1 when the property is not a Nullable. A Nullable without a value
+    ///   is written as null, not as the inner default.
+    /// </summary>
+    HasValueOffset: NativeInt;
   end;
   PSerializationPlanItem = ^TSerializationPlanItem;
 
@@ -1008,6 +1014,7 @@ begin
     Item.ElementNativeKind := nkUnknown;
     Item.ListOwnsObjects := False;
     Item.UseDirect := False;
+    Item.HasValueOffset := -1;
 
     for TypeField in TypeFields do
     begin
@@ -1058,6 +1065,20 @@ begin
               Item.UseDirect := True;
             end;
           end;
+        end;
+
+        // A Nullable read straight at its value would turn "no value" into
+        // the inner default (0, ''): the direct path also needs its HasValue
+        // flag. When that flag is not a Boolean the property stays on the
+        // RTTI path, which already checks HasValue (TryUnwrapProp).
+        if Item.UseDirect and SmartMeta.IsNullable then
+        begin
+          if (SmartMeta.HasValueField <> nil) and
+             (SmartMeta.HasValueField.FieldType <> nil) and
+             (SmartMeta.HasValueField.FieldType.Handle = TypeInfo(Boolean)) then
+            Item.HasValueOffset := Item.DirectOffset + SmartMeta.HasValueField.Offset
+          else
+            Item.UseDirect := False;
         end;
 
         if Item.UseDirect then
@@ -1415,6 +1436,15 @@ begin
 
     if Item^.UseDirect then
     begin
+      // A Nullable without a value: null, like the RTTI path below.
+      if (Item^.HasValueOffset >= 0) and
+         not TDextDirectAccess.ReadBoolean(Obj, Item^.HasValueOffset) then
+      begin
+        if not FSettings.FIgnoreNullValues then
+          Result.SetNull(Item^.JsonName);
+        Continue;
+      end;
+
       if Defaults then
         case Item^.DirectKind of
           nkInt32:
